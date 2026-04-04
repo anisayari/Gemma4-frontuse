@@ -1,0 +1,155 @@
+Voici un code complet pour créer une présentation interactive et élégante. J'ai utilisé la bibliothèque **Reveal.js**, qui est la référence pour créer des slides en HTML.
+
+Vous n'avez rien à installer : le code charge la bibliothèque via un CDN (internet). Il vous suffit de copier ce code dans un fichier nommé `ia_presentation.html` et de l'ouvrir avec votre navigateur.
+
+```html
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Comprendre l'Intelligence Artificielle</title>
+    
+    <!-- Importation de Reveal.js -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/theme/dracula.min.css">
+    
+    <style>
+        .highlight { color: #ff79c6; font-weight: bold; }
+        .math { background: #44475a; padding: 10px; border-radius: 8px; font-family: 'Courier New', Courier, monospace; }
+    </style>
+</head>
+<body>
+
+    <div class="reveal">
+        <div class="slides">
+
+            <!-- Slide 1: Titre -->
+            <section>
+                <h1>L'Intelligence <span class="highlight">Artificielle</span></h1>
+                <p>Guide simplifié pour comprendre la révolution technologique</p>
+                <p style="font-size: 0.6em; opacity: 0.7;">Utilisez les flèches du clavier pour naviguer $\rightarrow$</p>
+            </section>
+
+            <!-- Slide 2: C'est quoi l'IA ? -->
+            <section>
+                <h2>C'est quoi l'IA ?</h2>
+                <p>L'IA est un domaine de l'informatique qui vise à créer des systèmes capables de simuler des <span class="highlight">capacités cognitives humaines</span>.</p>
+                <ul>
+                    <li class="fragment">Apprendre de l'expérience</li>
+                    <li class="fragment">Reconnaître des motifs (patterns)</li>
+                    <li class="fragment">Prendre des décisions</li>
+                    <li class="fragment">Résoudre des problèmes complexes</li>
+                </ul>
+            </section>
+
+            <!-- Slide 3: La hiérarchie (Poupées Russes) -->
+            <section>
+                <h2>La Hiérarchie de l'IA</h2>
+                <p>Il ne faut pas confondre ces trois termes :</p>
+                <div style="display: flex; justify-content: center; align-items: center; gap: 20px;">
+                    <div style="border: 2px solid white; padding: 20px; border-radius: 15px;">
+                        <strong>IA</strong><br><small>Le concept global</small>
+                    </div>
+                    <span>$\rightarrow$</span>
+                    <div style="border: 2px solid #ff79c6; padding: 20px; border-radius: 15px;">
+                        <strong>Machine Learning</strong><br><small>L'apprentissage</small>
+                    </div>
+                    <span>$\rightarrow$</span>
+                    <div style="border: 2px solid #50fa7b; padding: 20px; border-radius: 15px;">
+                        <strong>Deep Learning</strong><br><small>Les réseaux de neurones</small>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Slide 4: Comment ça marche ? (Maths simplifiées) -->
+            <section>
+                <h2>Comment ça apprend ?</h2>
+                <p>Le Machine Learning utilise des fonctions mathématiques pour trouver une relation entre une entrée $x$ et une sortie $y$.</p>
+                <div class="math">
+                    $$ y = f(x, w) + b $$
+                </div>
+                <p style="font-size: 0.8em; margin-top: 20px;">
+                    L'IA ajuste les <span class="highlight">poids ($w$)</span> et le <span class="highlight">biais ($b$)</span> pour réduire l'erreur entre sa prédiction et la réalité.
+                </p>
+            </section>
+
+            <!-- Slide 5: IA Générative (LLM) -->
+            <section>
+                <h2>L'IA Générative (ex: ChatGPT)</h2>
+                <p>Ces modèles sont basés sur l'architecture <span class="highlight">Transformer</span>.</p>
+                <ul>
+                    <li class="fragment">Ils ne "réfléchissent" pas.</li>
+                    <li class="fragment">Ils prédisent le <span class="highlight">prochain mot</span> le plus probable dans une séquence.</li>
+                    <li class="fragment">C'est comme un clavier prédictif extrêmement sophistiqué.</li>
+                </ul>
+            </section>
+
+            <!-- Slide 6: Applications concrètes -->
+            <section>
+                <h2>Applications au quotidien</h2>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; font-size: 0.8em;">
+                    <div style="background: #6272a4; padding: 15px; border-radius: 10px;">
+                        <strong>Santé</strong><br>Diagnostic par imagerie médicale.
+                    </div>
+                    <div style="background: #6272a4; padding: 15px; border-radius: 10px;">
+                        <strong>Transports</strong><br>Voitures autonomes (Tesla).
+                    </div>
+                    <div style="background: #6272a4; padding: 15px; border-radius: 10px;">
+                        <strong>Loisirs</strong><br>Recommandations Netflix/Spotify.
+                    </div>
+                    <div style="background: #6272a4; padding: 15px; border-radius: 10px;">
+                        <strong>Création</strong><br>Images (Midjourney), Textes.
+                    </div>
+                </div>
+            </section>
+
+            <!-- Slide 7: Conclusion/Éthique -->
+            <section>
+                <h2>Défis et Éthique</h2>
+                <p>L'IA apporte des opportunités, mais pose des questions :</p>
+                <ul style="font-size: 0.9em;">
+                    <li><span class="highlight">Biais :</span> L'IA peut reproduire des préjugés humains.</li>
+                    <li><span class="highlight">Emploi :</span> Automatisation de certaines tâches.</li>
+                    <li><span class="highlight">Vérité :</span> Le risque d'hallucinations (invention de faits).</li>
+                </ul>
+                <h3 style="margin-top: 40px;">Merci de votre attention !</h3>
+            </section>
+
+        </div>
+    </div>
+
+    <!-- Scripts Reveal.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/reveal.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/notes/notes.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/markdown/markdown.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/4.5.0/plugin/highlight/highlight.min.js"></script>
+    <!-- MathJax pour les formules mathématiques -->
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+
+    <script>
+        Reveal.initialize({
+            hash: true,
+            controls: true,
+            progress: true,
+            center: true,
+            plugins: [ RevealMarkdown, RevealHighlight, RevealNotes ]
+        });
+    </script>
+</body>
+</html>
+```
+
+### Comment utiliser ce fichier :
+1. Copiez le code ci-dessus.
+2. Créez un nouveau fichier sur votre ordinateur et nommez-le `index.html` ou `ia.html`.
+3. Collez le code et enregistrez.
+4. Faites un double-clic sur le fichier pour l'ouvrir dans votre navigateur (Chrome, Firefox, Edge, etc.).
+
+### Fonctionnalités incluses :
+- **Interactivité** : Utilisez les flèches $\leftarrow \rightarrow$ de votre clavier pour passer d'une slide à l'autre.
+- **Animations** : Certains éléments apparaissent progressivement (classe `fragment`).
+- **Design Moderne** : Utilisation du thème "Dracula" (sombre et coloré).
+- **Mathématiques** : Intégration de MathJax pour afficher proprement la formule de base du Machine Learning.
+- **Responsive** : S'adapte à la taille de votre écran.

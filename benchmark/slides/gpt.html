@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Présentation - L'intelligence artificielle</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #111827;
+      --accent: #38bdf8;
+      --accent-2: #22c55e;
+      --text: #e5e7eb;
+      --muted: #94a3b8;
+      --danger: #f97316;
+      --shadow: 0 20px 40px rgba(0,0,0,0.35);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(135deg, #020617, #0f172a 45%, #1e293b);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    .presentation {
+      width: 100vw;
+      height: 100vh;
+      position: relative;
+    }
+
+    .slide {
+      width: 100%;
+      height: 100%;
+      display: none;
+      padding: 60px 8vw;
+      position: absolute;
+      top: 0;
+      left: 0;
+      animation: fade 0.4s ease;
+    }
+
+    .slide.active {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+    }
+
+    @keyframes fade {
+      from { opacity: 0; transform: translateX(20px); }
+      to { opacity: 1; transform: translateX(0); }
+    }
+
+    h1, h2 {
+      margin: 0 0 20px 0;
+      line-height: 1.1;
+    }
+
+    h1 {
+      font-size: 3.2rem;
+      color: white;
+    }
+
+    h2 {
+      font-size: 2.3rem;
+      color: var(--accent);
+    }
+
+    p, li {
+      font-size: 1.3rem;
+      line-height: 1.6;
+      color: var(--text);
+    }
+
+    .subtitle {
+      font-size: 1.4rem;
+      color: var(--muted);
+      max-width: 900px;
+    }
+
+    .card {
+      background: rgba(17, 24, 39, 0.75);
+      border: 1px solid rgba(148, 163, 184, 0.18);
+      border-radius: 22px;
+      padding: 28px;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(8px);
+      max-width: 1100px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(280px, 1fr));
+      gap: 20px;
+      max-width: 1100px;
+    }
+
+    .box {
+      background: rgba(255,255,255,0.04);
+      border-left: 5px solid var(--accent);
+      border-radius: 16px;
+      padding: 20px;
+    }
+
+    .box.green {
+      border-left-color: var(--accent-2);
+    }
+
+    .box.orange {
+      border-left-color: var(--danger);
+    }
+
+    ul {
+      margin-top: 10px;
+    }
+
+    .controls {
+      position: absolute;
+      bottom: 24px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      background: rgba(2, 6, 23, 0.7);
+      border: 1px solid rgba(148, 163, 184, 0.2);
+      border-radius: 999px;
+      padding: 10px 16px;
+      backdrop-filter: blur(8px);
+    }
+
+    button {
+      border: none;
+      background: var(--accent);
+      color: #062033;
+      font-weight: bold;
+      padding: 10px 16px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-size: 1rem;
+    }
+
+    button:hover {
+      filter: brightness(1.08);
+    }
+
+    .counter {
+      color: white;
+      font-weight: bold;
+      min-width: 70px;
+      text-align: center;
+    }
+
+    .big {
+      font-size: 1.6rem;
+      color: #f8fafc;
+      max-width: 1000px;
+    }
+
+    .highlight {
+      color: var(--accent);
+      font-weight: bold;
+    }
+
+    .footer-note {
+      position: absolute;
+      bottom: 90px;
+      right: 40px;
+      color: var(--muted);
+      font-size: 0.95rem;
+    }
+
+    @media (max-width: 900px) {
+      .slide {
+        padding: 36px 6vw;
+        overflow-y: auto;
+      }
+
+      h1 {
+        font-size: 2.2rem;
+      }
+
+      h2 {
+        font-size: 1.8rem;
+      }
+
+      p, li, .big {
+        font-size: 1.05rem;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .footer-note {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="presentation">
+    
+    <section class="slide active">
+      <h1>L'intelligence artificielle</h1>
+      <p class="subtitle">
+        Une présentation simple pour comprendre ce qu'est l'IA, comment elle fonctionne,
+        où on la trouve, et quels sont ses avantages et ses limites.
+      </p>
+      <div class="card" style="margin-top: 30px;">
+        <p class="big">
+          L’<span class="highlight">intelligence artificielle</span> est un ensemble de techniques
+          qui permettent à une machine d’effectuer des tâches qui demandent habituellement
+          de l’intelligence humaine : comprendre, apprendre, reconnaître, prédire ou générer.
+        </p>
+      </div>
+      <div class="footer-note">Utilise les boutons ou les flèches du clavier</div>
+    </section>
+
+    <section class="slide">
+      <h2>1. Qu'est-ce que l'IA ?</h2>
+      <div class="card">
+        <ul>
+          <li>L’IA permet à un ordinateur de <strong>traiter des informations</strong> et de <strong>prendre des décisions</strong>.</li>
+          <li>Elle peut reconnaître des images, comprendre du texte, traduire, recommander des contenus ou répondre à des questions.</li>
+          <li>Elle ne “pense” pas comme un humain, mais elle <strong>analyse des données</strong> pour produire un résultat.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide">
+      <h2>2. Comment fonctionne l'IA ?</h2>
+      <div class="grid">
+        <div class="box">
+          <h3>Données</h3>
+          <p>L’IA apprend à partir de grandes quantités de données : textes, images, sons, vidéos, chiffres.</p>
+        </div>
+        <div class="box green">
+          <h3>Entraînement</h3>
+          <p>On entraîne un modèle pour qu’il repère des relations, des motifs et des régularités dans ces données.</p>
+        </div>
+        <div class="box orange">
+          <h3>Prédiction</h3>
+          <p>Une fois entraînée, l’IA peut proposer une réponse, une classification ou une création.</p>
+        </div>
+        <div class="box">
+          <h3>Amélioration</h3>
+          <p>Les modèles sont ajustés pour être plus précis, plus rapides et plus utiles.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <h2>3. Exemples d'utilisation</h2>
+      <div class="card">
+        <ul>
+          <li><strong>Assistants virtuels</strong> : répondre à des questions, rédiger, traduire.</li>
+          <li><strong>Médecine</strong> : aider à détecter certaines maladies sur des images médicales.</li>
+          <li><strong>Transport</strong> : analyse du trafic, aide à la conduite.</li>
+          <li><strong>Éducation</strong> : tutorat personnalisé, correction, synthèse.</li>
+          <li><strong>Commerce</strong> : recommandations de produits, chatbots, prévisions.</li>
+          <li><strong>Création</strong> : génération de texte, d’images, de musique ou de code.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide">
+      <h2>4. Les avantages de l'IA</h2>
+      <div class="grid">
+        <div class="box green">
+          <h3>Gain de temps</h3>
+          <p>Automatise des tâches répétitives et rapides à grande échelle.</p>
+        </div>
+        <div class="box green">
+          <h3>Aide à la décision</h3>
+          <p>Analyse un grand volume d’informations plus vite qu’un humain.</p>
+        </div>
+        <div class="box green">
+          <h3>Personnalisation</h3>
+          <p>Peut adapter des services selon les besoins de chaque utilisateur.</p>
+        </div>
+        <div class="box green">
+          <h3>Innovation</h3>
+          <p>Permet de nouveaux outils dans la santé, la science, l’éducation et l’industrie.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="slide">
+      <h2>5. Les limites et les risques</h2>
+      <div class="card">
+        <ul>
+          <li><strong>Erreurs</strong> : une IA peut se tromper ou inventer une information.</li>
+          <li><strong>Biais</strong> : si les données sont biaisées, les résultats peuvent l’être aussi.</li>
+          <li><strong>Vie privée</strong> : l’utilisation des données pose des questions éthiques.</li>
+          <li><strong>Emploi</strong> : certains métiers évoluent ou se transforment avec l’automatisation.</li>
+          <li><strong>Dépendance</strong> : il faut garder un regard humain critique.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide">
+      <h2>6. IA, humain et futur</h2>
+      <div class="card">
+        <p class="big">
+          L’IA n’est pas forcément là pour remplacer l’humain, mais souvent pour
+          <span class="highlight">l’assister</span>. Le défi est de l’utiliser de manière
+          responsable, utile et éthique.
+        </p>
+        <ul>
+          <li>L’humain garde le rôle de contrôle, de jugement et de responsabilité.</li>
+          <li>Le futur de l’IA dépendra de la manière dont on la conçoit et dont on l’encadre.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="slide">
+      <h2>7. Conclusion</h2>
+      <div class="card">
+        <p class="big">
+          L’intelligence artificielle est une technologie puissante qui transforme déjà notre quotidien.
+          Bien comprise et bien utilisée, elle peut devenir un outil précieux dans de nombreux domaines.
+        </p>
+        <p style="margin-top: 24px;">
+          <strong>Question finale :</strong> comment pouvons-nous utiliser l’IA de façon intelligente,
+          responsable et bénéfique pour tous ?
+        </p>
+      </div>
+    </section>
+
+    <div class="controls">
+      <button onclick="prevSlide()">◀ Précédent</button>
+      <div class="counter" id="counter">1 / 7</div>
+      <button onclick="nextSlide()">Suivant ▶</button>
+    </div>
+  </div>
+
+  <script>
+    const slides = document.querySelectorAll('.slide');
+    const counter = document.getElementById('counter');
+    let current = 0;
+
+    function showSlide(index) {
+      slides.forEach(slide => slide.classList.remove('active'));
+      current = (index + slides.length) % slides.length;
+      slides[current].classList.add('active');
+      counter.textContent = `${current + 1} / ${slides.length}`;
+    }
+
+    function nextSlide() {
+      showSlide(current + 1);
+    }
+
+    function prevSlide() {
+      showSlide(current - 1);
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowRight' || e.key === ' ') nextSlide();
+      if (e.key === 'ArrowLeft') prevSlide();
+    });
+
+    showSlide(0);
+  </script>
+</body>
+</html>

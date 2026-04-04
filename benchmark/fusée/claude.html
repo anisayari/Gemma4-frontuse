@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Simulateur de Fusée Spatiale</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+            background: #000;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #ui {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: #0f0;
+            z-index: 10;
+            text-shadow: 0 0 10px #0f0;
+        }
+
+        #ui div {
+            margin: 4px 0;
+            font-size: 14px;
+        }
+
+        #controls {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            text-align: center;
+        }
+
+        #launchBtn {
+            padding: 18px 50px;
+            font-size: 22px;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            background: linear-gradient(180deg, #ff4500, #cc0000);
+            color: white;
+            border: 3px solid #ff6600;
+            border-radius: 12px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            box-shadow: 0 0 30px rgba(255, 69, 0, 0.6), inset 0 -3px 10px rgba(0,0,0,0.3);
+            transition: all 0.2s;
+        }
+
+        #launchBtn:hover {
+            background: linear-gradient(180deg, #ff6600, #ee2200);
+            box-shadow: 0 0 50px rgba(255, 69, 0, 0.9);
+            transform: scale(1.05);
+        }
+
+        #launchBtn:active {
+            transform: scale(0.97);
+        }
+
+        #launchBtn.launched {
+            background: linear-gradient(180deg, #444, #222);
+            border-color: #555;
+            box-shadow: none;
+            cursor: default;
+        }
+
+        #throttle-container {
+            position: fixed;
+            right: 30px;
+            top: 50%;
+            transform: translateY(-50%);
+            z-index: 10;
+            display: none;
+            text-align: center;
+        }
+
+        #throttle-label {
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            text-shadow: 0 0 8px #0f0;
+            margin-bottom: 8px;
+        }
+
+        #throttle {
+            -webkit-appearance: none;
+            appearance: none;
+            writing-mode: vertical-lr;
+            direction: rtl;
+            width: 20px;
+            height: 200px;
+            background: transparent;
+            outline: none;
+        }
+
+        #throttle::-webkit-slider-runnable-track {
+            width: 8px;
+            height: 200px;
+            background: linear-gradient(to top, #0f0, #ff0, #f00);
+            border-radius: 4px;
+            border: 1px solid #333;
+        }
+
+        #throttle::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 28px;
+            height: 14px;
+            background: #ddd;
+            border-radius: 3px;
+            cursor: pointer;
+            margin-left: -10px;
+            border: 1px solid #999;
+        }
+
+        #phase-banner {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 36px;
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            text-shadow: 0 0 30px rgba(255,255,255,0.8);
+            z-index: 20;
+            opacity: 0;
+            transition: opacity 0.5s;
+            pointer-events: none;
+            text-align: center;
+        }
+
+        #minimap {
+            position: fixed;
+            right: 20px;
+            top: 20px;
+            width: 40px;
+            height: 300px;
+            border: 1px solid rgba(0, 255, 0, 0.4);
+            border-radius: 6px;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 10;
+            overflow: hidden;
+        }
+
+        #minimap-rocket {
+            position: absolute;
+            bottom: 5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 6px;
+            height: 10px;
+            background: #ff4500;
+            border-radius: 3px 3px 0 0;
+            transition: bottom 0.1s;
+        }
+
+        #minimap-labels {
+            position: absolute;
+            left: -80px;
+            width: 75px;
+            height: 100%;
+            z-index: 11;
+        }
+
+        .minimap-label {
+            position: absolute;
+            right: 0;
+            color: rgba(0, 255, 0, 0.6);
+            font-size: 9px;
+            font-family: 'Courier New', monospace;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div id="ui">
+        <div>⏱ Temps MET: <span id="met">T-00:00</span></div>
+        <div>📏 Altitude: <span id="altitude">0</span> m</div>
+        <div>⚡ Vitesse: <span id="speed">0</span> m/s</div>
+        <div>🔥 Poussée: <span id="thrust">0</span>%</div>
+        <div>⛽ Carburant: <span id="fuel">100</span>%</div>
+        <div>🌡 Temp. ext: <span id="temp">15</span>°C</div>
+        <div>🏷 Phase: <span id="phase">Au sol</span></div>
+        <div>🌍 Zone: <span id="zone">Surface terrestre</span></div>
+    </div>
+
+    <div id="minimap">
+        <div id="minimap-labels">
+            <span class="minimap-label" style="bottom: 95%;">Deep Space</span>
+            <span class="minimap-label" style="bottom: 75%;">Orbite</span>
+            <span class="minimap-label" style="bottom: 55%;">Kármán</span>
+            <span class="minimap-label" style="bottom: 35%;">Strato.</span>
+            <span class="minimap-label" style="bottom: 15%;">Tropo.</span>
+            <span class="minimap-label" style="bottom: 2%;">Sol</span>
+        </div>
+        <div id="minimap-rocket"></div>
+    </div>
+
+    <div id="controls">
+        <button id="launchBtn" onclick="launch()">🔥 Lancement 🔥</button>
+    </div>
+
+    <div id="throttle-container">
+        <div id="throttle-label">POUSSÉE</div>
+        <input type="range" id="throttle" min="0" max="100" value="100" oninput="setThrottle(this.value)">
+        <div id="throttle-label" style="margin-top:8px;"><span id="throttle-val">100</span>%</div>
+    </div>
+
+    <div id="phase-banner"></div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let W, H;
+        function resize() {
+            W = canvas.width = window.innerWidth;
+            H = canvas.height = window.innerHeight;
+        }
+        resize();
+        window.addEventListener('resize', resize);
+
+        // === GAME STATE ===
+        let launched = false;
+        let rocketY = 0;         // altitude in meters
+        let rocketVel = 0;       // m/s
+        let throttle = 100;
+        let fuel = 100;
+        let time = 0;
+        let met = 0;             // mission elapsed time
+        let shaking = 0;
+        let phase = 'Au sol';
+        let phaseBannerTimeout = null;
+
+        // Rocket visual position on screen
+        let rocketScreenY = 0;
+        let cameraY = 0;
+
+        // Stars
+        const stars = [];
+        for (let i = 0; i < 600; i++) {
+            stars.push({
+                x: Math.random() * 3000 - 500,
+                y: Math.random() * 50000,
+                size: Math.random() * 2.5 + 0.5,
+                brightness: Math.random(),
+                twinkleSpeed: Math.random() * 3 + 1
+            });
+        }
+
+        // Deep space stars (very far)
+        const deepStars = [];
+        for (let i = 0; i < 400; i++) {
+            deepStars.push({
+                x: Math.random() * 3000 - 500,
+                y: Math.random() * 500000 + 50000,
+                size: Math.random() * 3 + 0.5,
+                brightness: Math.random(),
+                twinkleSpeed: Math.random() * 2 + 0.5,
+                color: ['#fff', '#aaf', '#faa', '#ffa', '#aff'][Math.floor(Math.random() * 5)]
+            });
+        }
+
+        // Particles
+        let particles = [];
+        let exhaustParticles = [];
+
+        // Clouds
+        const clouds = [];
+        for (let i = 0; i < 20; i++) {
+            clouds.push({
+                x: Math.random() * 2000 - 200,
+                y: 1000 + Math.random() * 10000,
+                w: 150 + Math.random() * 300,
+                h: 40 + Math.random() * 80,
+                opacity: 0.3 + Math.random() * 0.5
+            });
+        }
+
+        // === ALTITUDE ZONES ===
+        const TROPOSPHERE = 12000;
+        const STRATOSPHERE = 50000;
+        const MESOSPHERE = 80000;
+        const KARMAN_LINE = 100000;
+        const THERMOSPHERE = 700000;
+        const LOW_ORBIT = 400000;
+        const HIGH_ORBIT = 2000000;
+        const DEEP_SPACE = 10000000;
+
+        function getZone(alt) {
+            if (alt < 100) return 'Surface terrestre';
+            if (alt < TROPOSPHERE) return 'Troposphère';
+            if (alt < STRATOSPHERE) return 'Stratosphère';
+            if (alt < MESOSPHERE) return 'Mésosphère';
+            if (alt < KARMAN_LINE) return 'Ligne de Kármán (limite espace)';
+            if (alt < LOW_ORBIT) return 'Thermosphère';
+            if (alt < HIGH_ORBIT) return 'Orbite basse (LEO)';
+            if (alt < DEEP_SPACE) return 'Orbite haute';
+            return '🌌 Espace profond';
+        }
+
+        function getTemperature(alt) {
+            if (alt < TROPOSPHERE) return 15 - (alt / TROPOSPHERE) * 70;
+            if (alt < STRATOSPHERE) return -55 + ((alt - TROPOSPHERE) / (STRATOSPHERE - TROPOSPHERE)) * 55;
+            if (alt < MESOSPHERE) return 0 - ((alt - STRATOSPHERE) / (MESOSPHERE - STRATOSPHERE)) * 90;
+            if (alt < KARMAN_LINE) return -90;
+            if (alt < THERMOSPHERE) return -90 + ((alt - KARMAN_LINE) / (THERMOSPHERE - KARMAN_LINE)) * 1590;
+            return 1500;
+        }
+
+        function getSkyColor(alt) {
+            if (alt < 100) return { r: 135, g: 206, b: 235 };
+            if (alt < TROPOSPHERE) {
+                let t = alt / TROPOSPHERE;
+                return {
+                    r: Math.floor(135 * (1 - t) + 30 * t),
+                    g: Math.floor(206 * (1 - t) + 50 * t),
+                    b: Math.floor(235 * (1 - t) + 120 * t)
+                };
+            }
+            if (alt < STRATOSPHERE) {
+                let t = (alt - TROPOSPHERE) / (STRATOSPHERE - TROPOSPHERE);
+                return {
+                    r: Math.floor(30 * (1 - t) + 5 * t),
+                    g: Math.floor(50 * (1 - t) + 5 * t),
+                    b: Math.floor(120 * (1 - t) + 40 * t)
+                };
+            }
+            if (alt < KARMAN_LINE) {
+                let t = (alt - STRATOSPHERE) / (KARMAN_LINE - STRATOSPHERE);
+                return {
+                    r: Math.floor(5 * (1 - t)),
+                    g: Math.floor(5 * (1 - t)),
+                    b: Math.floor(40 * (1 - t) + 5 * t)
+                };
+            }
+            return { r: 0, g: 0, b: 0 };
+        }
+
+        function getGravity(alt) {
+            const R = 6371000;
+            return 9.81 * Math.pow(R / (R + alt), 2);
+        }
+
+        function getAtmDensity(alt) {
+            if (alt > 200000) return 0;
+            return Math.exp(-alt / 8500);
+        }
+
+        // === LAUNCH ===
+        function launch() {
+            if (launched) return;
+            launched = true;
+            document.getElementById('launchBtn').classList.add('launched');
+            document.getElementById('launchBtn').textContent = '🚀 EN VOL';
+            document.getElementById('throttle-container').style.display = 'block';
+            showPhaseBanner('🔥 ALLUMAGE DES MOTEURS');
+            phase = 'Décollage';
+
+            // Countdown already done, ignite
+            setTimeout(() => {
+                showPhaseBanner('🚀 DÉCOLLAGE !');
+            }, 1500);
+        }
+
+        function setThrottle(val) {
+            throttle = parseInt(val);
+            document.getElementById('throttle-val').textContent = val;
+        }
+
+        function showPhaseBanner(text) {
+            const banner = document.getElementById('phase-banner');
+            banner.textContent = text;
+            banner.style.opacity = 1;
+            clearTimeout(phaseBannerTimeout);
+            phaseBannerTimeout = setTimeout(() => {
+                banner.style.opacity = 0;
+            }, 3000);
+        }
+
+        // === PHASE TRACKING ===
+        let lastZone = '';
+        let maxVel = 0;
+        let reachedSpace = false;
+        let reachedOrbit = false;
+        let reachedDeep = false;
+
+        function checkPhases() {
+            let z = getZone(rocketY);
+            if (z !== lastZone) {
+                lastZone = z;
+                showPhaseBanner('📍 ' + z);
+
+                if (rocketY >= KARMAN_LINE && !reachedSpace) {
+                    reachedSpace = true;
+                    setTimeout(() => showPhaseBanner('🎉 BIENVENUE DANS L\'ESPACE !'), 3500);
+                }
+                if (rocketY >= LOW_ORBIT && !reachedOrbit) {
+                    reachedOrbit = true;
+                    setTimeout(() => showPhaseBanner('🛸 ORBITE ATTEINTE !'), 3500);
+                }
+                if (rocketY >= DEEP_SPACE && !reachedDeep) {
+                    reachedDeep = true;
+                    setTimeout(() => showPhaseBanner('🌌 ESPACE PROFOND — AU-DELÀ !'), 3500);
+                }
+            }
+        }
+
+        // === DRAWING ===
+        function drawSky() {
+            let sky = getSkyColor(rocketY);
+            ctx.fillStyle = `rgb(${sky.r},${sky.g},${sky.b})`;
+            ctx.fillRect(0, 0, W, H);
+        }
+
+        function drawStars() {
+            let visibility = 0;
+            if (rocketY > TROPOSPHERE) {
+                visibility = Math.min(1, (rocketY - TROPOSPHERE) / (STRATOSPHERE - TROPOSPHERE));
+            }
+            if (visibility <= 0) return;
+
+            stars.forEach(s => {
+                let sx = ((s.x - cameraY * 0.01) % (W + 200));
+                if (sx < 0) sx += W + 200;
+                let sy = ((s.y - cameraY * 0.05) % (H + 200));
+                if (sy < 0) sy += H + 200;
+
+                let twinkle = 0.5 + 0.5 * Math.sin(time * s.twinkleSpeed);
+                let alpha = visibility * s.brightness * twinkle;
+
+                ctx.beginPath();
+                ctx.arc(sx, sy, s.size, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+                ctx.fill();
+            });
+
+            // Deep space stars
+            if (rocketY > KARMAN_LINE) {
+                let deepVis = Math.min(1, (rocketY - KARMAN_LINE) / (LOW_ORBIT - KARMAN_LINE));
+                deepStars.forEach(s => {
+                    let sx = ((s.x - cameraY * 0.002) % (W + 200));
+                    if (sx < 0) sx += W + 200;
+                    let sy = ((s.y * 0.001 - cameraY * 0.008) % (H + 200));
+                    if (sy < 0) sy += H + 200;
+
+                    let twinkle = 0.5 + 0.5 * Math.sin(time * s.twinkleSpeed);
+                    let alpha = deepVis * s.brightness * twinkle;
+
+                    ctx.beginPath();
+                    ctx.arc(sx, sy, s.size * deepVis, 0, Math.PI * 2);
+                    ctx.fillStyle = s.color.replace(')', `,${alpha})`).replace('rgb', 'rgba').replace('#fff', `rgba(255,255,255,${alpha})`);
+                    if (s.color.startsWith('#')) {
+                        ctx.fillStyle = `rgba(255,255,255,${alpha})`;
+                    }
+                    ctx.fill();
+                });
+            }
+        }
+
+        function drawEarth() {
+            // Ground level
+            let groundScreenY = H * 0.85 - (0 - cameraY) * 0.1;
+
+            if (groundScreenY < H + 200) {
+                // Ground
+                let grd = ctx.createLinearGradient(0, groundScreenY, 0, groundScreenY + 300);
+                grd.addColorStop(0, '#2d5a1b');
+                grd.addColorStop(0.3, '#3a6b2a');
+                grd.addColorStop(1, '#1a3a0f');
+                ctx.fillStyle = grd;
+                ctx.fillRect(0, groundScreenY, W, H - groundScreenY + 500);
+
+                // Launch pad
+                let padX = W / 2;
+                let padW = 120;
+                ctx.fillStyle = '#555';
+                ctx.fillRect(padX - padW / 2, groundScreenY - 5, padW, 15);
+                ctx.fillStyle = '#777';
+                ctx.fillRect(padX - padW / 2 + 5, groundScreenY - 5, padW - 10, 5);
+
+                // Tower
+                ctx.fillStyle = '#888';
+                ctx.fillRect(padX - 70, groundScreenY - 120, 8, 120);
+                ctx.fillStyle = '#f00';
+                ctx.fillRect(padX - 74, groundScreenY - 125, 16, 10);
+
+                // Small buildings
+                ctx.fillStyle = '#444';
+                ctx.fillRect(padX + 100, groundScreenY - 20, 40, 20);
+                ctx.fillRect(padX - 160, groundScreenY - 15, 30, 15);
+            }
+
+            // Earth curvature when very high
+            if (rocketY > STRATOSPHERE) {
+                let curve = Math.min(1, (rocketY - STRATOSPHERE) / (KARMAN_LINE * 3));
+                let radius = 3000 / (0.1 + curve * 0.9);
+                let earthY = H + radius * (0.5 + curve * 2);
+
+                ctx.beginPath();
+                ctx.arc(W / 2, earthY, radius, 0, Math.PI * 2);
+                let earthGrd = ctx.createRadialGradient(W / 2, earthY, radius * 0.8, W / 2, earthY, radius);
+                earthGrd.addColorStop(0, '#1a5a1a');
+                earthGrd.addColorStop(0.6, '#1a4a8a');
+                earthGrd.addColorStop(0.85, '#1a3a7a');
+                earthGrd.addColorStop(1, '#0a1a3a');
+                ctx.fillStyle = earthGrd;
+                ctx.fill();
+
+                // Atmosphere glow
+                ctx.beginPath();
+                ctx.arc(W / 2, earthY, radius + 15, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(100,180,255,${0.4 * curve})`;
+                ctx.lineWidth = 20;
+                ctx.stroke();
+
+                ctx.beginPath();
+                ctx.arc(W / 2, earthY, radius + 5, 0, Math.PI * 2);
+                ctx.strokeStyle = `rgba(150,220,255,${0.3 * curve})`;
+                ctx.lineWidth = 8;
+                ctx.stroke();
+            }
+        }
+
+        function drawClouds() {
+            clouds.forEach(c => {
+                let cy = H * 0.85 - (c.y - cameraY) * 0.1;
+                if (cy < -100 || cy > H + 100) return;
+
+                ctx.fillStyle = `rgba(255,255,255,${c.opacity * Math.max(0, 1 - rocketY / STRATOSPHERE)})`;
+                ctx.beginPath();
+                ctx.ellipse(c.x, cy, c.w / 2, c.h / 2, 0, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawRocket(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+
+            // Shake effect
+            if (launched && fuel > 0 && throttle > 0) {
+                let shakeAmt = Math.min(3, throttle / 30 * getAtmDensity(rocketY) + 0.5);
+                ctx.translate(
+                    (Math.random() - 0.5) * shakeAmt,
+                    (Math.random() - 0.5) * shakeAmt
+                );
+            }
+
+            let scale = 1;
+
+            // Main body
+            ctx.fillStyle = '#e8e8e8';
+            ctx.beginPath();
+            ctx.moveTo(0, -40 * scale);
+            ctx.lineTo(-12 * scale, 0);
+            ctx.lineTo(-12 * scale, 40 * scale);
+            ctx.lineTo(12 * scale, 40 * scale);
+            ctx.lineTo(12 * scale, 0);
+            ctx.closePath();
+            ctx.fill();
+            ctx.strokeStyle = '#999';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Nose cone
+            ctx.fillStyle = '#cc0000';
+            ctx.beginPath();
+            ctx.moveTo(0, -65 * scale);
+            ctx.lineTo(-12 * scale, -30 * scale);
+            ctx.lineTo(12 * scale, -30 * scale);
+            ctx.closePath();
+            ctx.fill();
+
+            // Window
+            ctx.beginPath();
+            ctx.arc(0, -15 * scale, 5 * scale, 0, Math.PI * 2);
+            ctx.fillStyle = '#4af';
+            ctx.fill();
+            ctx.strokeStyle = '#aaa';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+
+            // Fins
+            ctx.fillStyle = '#cc0000';
+            // Left fin
+            ctx.beginPath();
+            ctx.moveTo(-12 * scale, 25 * scale);
+            ctx.lineTo(-25 * scale, 45 * scale);
+            ctx.lineTo(-12 * scale, 42 * scale);
+            ctx.closePath();
+            ctx.fill();
+            // Right fin
+            ctx.beginPath();
+            ctx.moveTo(12 * scale, 25 * scale);
+            ctx.lineTo(25 * scale, 45 * scale);
+            ctx.lineTo(12 * scale, 42 * scale);
+            ctx.closePath();
+            ctx.fill();
+
+            // Stripes
+            ctx.fillStyle = '#bbb';
+            ctx.fillRect(-12 * scale, 5 * scale, 24 * scale, 3 * scale);
+            ctx.fillRect(-12 * scale, 20 * scale, 24 * scale, 3 * scale);
+
+            // Nozzle
+            ctx.fillStyle = '#555';
+            ctx.beginPath();
+            ctx.moveTo(-8 * scale, 40 * scale);
+            ctx.lineTo(-11 * scale, 50 * scale);
+            ctx.lineTo(11 * scale, 50 * scale);
+            ctx.lineTo(8 * scale, 40 * scale);
+            ctx.closePath();
+            ctx.fill();
+
+            // Flame / exhaust
+            if (launched && fuel > 0 && throttle > 0) {
+                let flameLen = 30 + throttle * 0.7 + Math.random() * 20;
+                let flameW = 8 + throttle * 0.05;
+
+                // Outer flame
+                let flameGrd = ctx.createLinearGradient(0, 50 * scale, 0, 50 * scale + flameLen);
+                flameGrd.addColorStop(0, 'rgba(255,200,50,0.95)');
+                flameGrd.addColorStop(0.3, 'rgba(255,100,0,0.85)');
+                flameGrd.addColorStop(0.7, 'rgba(255,50,0,0.5)');
+                flameGrd.addColorStop(1, 'rgba(255,30,0,0)');
+
+                ctx.beginPath();
+                ctx.moveTo(-flameW, 50 * scale);
+                ctx.quadraticCurveTo(
+                    (Math.random() - 0.5) * 8,
+                    50 * scale + flameLen * 0.6,
+                    0,
+                    50 * scale + flameLen
+                );
+                ctx.quadraticCurveTo(
+                    (Math.random() - 0.5) * 8,
+                    50 * scale + flameLen * 0.6,
+                    flameW,
+                    50 * scale
+                );
+                ctx.fillStyle = flameGrd;
+                ctx.fill();
+
+                // Inner flame (blue/white)
+                let innerLen = flameLen * 0.5;
+                let innerGrd = ctx.createLinearGradient(0, 50 * scale, 0, 50 * scale + innerLen);
+                innerGrd.addColorStop(0, 'rgba(200,220,255,0.95)');
+                innerGrd.addColorStop(0.5, 'rgba(100,150,255,0.7)');
+                innerGrd.addColorStop(1, 'rgba(255,200,50,0)');
+
+                ctx.beginPath();
+                ctx.moveTo(-flameW * 0.4, 50 * scale);
+                ctx.quadraticCurveTo(0, 50 * scale + innerLen * 0.7, 0, 50 * scale + innerLen);
+                ctx.quadraticCurveTo(0, 50 * scale + innerLen * 0.7, flameW * 0.4, 50 * scale);
+                ctx.fillStyle = innerGrd;
+                ctx.fill();
+
+                // Engine glow
+                ctx.beginPath();
+                ctx.arc(0, 50 * scale, 20, 0, Math.PI * 2);
+                let glowGrd = ctx.createRadialGradient(0, 50 * scale, 0, 0, 50 * scale, 25);
+                glowGrd.addColorStop(0, `rgba(255,200,100,${throttle / 200})`);
+                glowGrd.addColorStop(1, 'rgba(255,100,0,0)');
+                ctx.fillStyle = glowGrd;
+                ctx.fill();
+            }
+
+            ctx.restore();
+        }
+
+        function spawnExhaustParticles(x, y) {
+            if (!launched || fuel <= 0 || throttle <= 0) return;
+
+            for (let i = 0; i < Math.floor(throttle / 15) + 1; i++) {
+                exhaustParticles.push({
+                    x: x + (Math.random() - 0.5) * 10,
+                    y: y + 50 + Math.random() * 10,
+                    vx: (Math.random() - 0.5) * 3,
+                    vy: Math.random() * 4 + 2,
+                    life: 1,
+                    decay: 0.01 + Math.random() * 0.02,
+                    size: 3 + Math.random() * 5,
+                    type: Math.random() > 0.3 ? 'smoke' : 'fire'
+                });
+            }
+        }
+
+        function updateAndDrawParticles() {
+            // Exhaust particles
+            for (let i = exhaustParticles.length - 1; i >= 0; i--) {
+                let p = exhaustParticles[i];
+                p.x += p.vx;
+                p.vy += 0.1;
+                p.y += p.vy;
+                p.life -= p.decay;
+                p.size += 0.15;
+
+                if (p.life <= 0) {
+                    exhaustParticles.splice(i, 1);
+                    continue;
+                }
+
+                let screenY = p.y - cameraY * 0.1 + H * 0.5;
+
+                if (p.type === 'fire') {
+                    ctx.beginPath();
+                    ctx.arc(p.x, screenY, p.size, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(255,${Math.floor(150 * p.life)},0,${p.life * 0.5})`;
+                    ctx.fill();
+                } else {
+                    ctx.beginPath();
+                    ctx.arc(p.x, screenY, p.size, 0, Math.PI * 2);
+                    ctx.fillStyle = `rgba(180,180,180,${p.life * 0.3})`;
+                    ctx.fill();
+                }
+            }
+
+            // Limit particles
+            if (exhaustParticles.length > 500) {
+                exhaustParticles = exhaustParticles.slice(-300);
+            }
+        }
+
+        function drawReentryEffect(x, y) {
+            if (rocketY < MESOSPHERE || rocketVel < 1000) return;
+
+            let intensity = Math.min(1, (rocketVel - 1000) / 5000);
+            let density = getAtmDensity(rocketY);
+            let effect = intensity * density * 20;
+
+            if (effect < 0.01) return;
+
+            ctx.beginPath();
+            ctx.arc(x, y - 30, 40 + effect * 30, 0, Math.PI * 2);
+            let grd = ctx.createRadialGradient(x, y - 30, 0, x, y - 30, 40 + effect * 30);
+            grd.addColorStop(0, `rgba(255,200,100,${effect * 0.3})`);
+            grd.addColorStop(0.5, `rgba(255,100,50,${effect * 0.2})`);
+            grd.addColorStop(1, 'rgba(255,50,0,0)');
+            ctx.fillStyle = grd;
+            ctx.fill();
+        }
+
+        function drawNebulaBackground() {
+            if (rocketY < HIGH_ORBIT) return;
+            let vis = Math.min(0.3, (rocketY - HIGH_ORBIT) / DEEP_SPACE * 0.3);
+
+            // Nebula colors
+            let nebulaX = (W / 2 + Math.sin(time * 0.1) * 100);
+            let nebulaY = (H / 3 + Math.cos(time * 0.08) * 80);
+
+            ctx.beginPath();
+            ctx.arc(nebulaX, nebulaY, 300, 0, Math.PI * 2);
+            let ngrd = ctx.createRadialGradient(nebulaX, nebulaY, 0, nebulaX, nebulaY, 300);
+            ngrd.addColorStop(0, `rgba(100,50,150,${vis})`);
+            ngrd.addColorStop(0.5, `rgba(50,20,100,${vis * 0.5})`);
+            ngrd.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = ngrd;
+            ctx.fill();
+
+            // Second nebula
+            let n2x = W * 0.7 + Math.cos(time * 0.07) * 50;
+            let n2y = H * 0.6 + Math.sin(time * 0.06) * 60;
+            ctx.beginPath();
+            ctx.arc(n2x, n2y, 200, 0, Math.PI * 2);
+            let ngrd2 = ctx.createRadialGradient(n2x, n2y, 0, n2x, n2y, 200);
+            ngrd2.addColorStop(0, `rgba(50,100,150,${vis * 0.8})`);
+            ngrd2.addColorStop(0.5, `rgba(20,50,100,${vis * 0.4})`);
+            ngrd2.addColorStop(1, 'rgba(0,0,0,0)');
+            ctx.fillStyle = ngrd2;
+            ctx.fill();
+        }
+
+        function drawSun() {
+            if (rocketY < STRATOSPHERE) return;
+            let vis = Math.min(1, (rocketY - STRATOSPHERE) / KARMAN_LINE);
+
+            let sunX = W * 0.8;
+            let sunY = H * 0.15;
+
+            // Sun glow
+            ctx.beginPath();
+            ctx.arc(sunX, sunY, 80, 0, Math.PI * 2);
+            let sgrd = ctx.createRadialGradient(sunX, sunY, 0, sunX, sunY, 80);
+            sgrd.addColorStop(0, `rgba(255,255,220,${vis})`);
+            sgrd.addColorStop(0.3, `rgba(255,255,180,${vis * 0.6})`);
+            sgrd.addColorStop(0.7, `rgba(255,200,100,${vis * 0.2})`);
+            sgrd.addColorStop(1, 'rgba(255,150,50,0)');
+            ctx.fillStyle = sgrd;
+            ctx.fill();
+
+            // Sun core
+            ctx.beginPath();
+            ctx.arc(sunX, sunY, 20, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(255,255,240,${vis})`;
+            ctx.fill();
+
+            // Lens flare
+            ctx.beginPath();
+            ctx.arc(sunX, sunY, 120, 0, Math.PI * 2);
+            let lfGrd = ctx.createRadialGradient(sunX, sunY, 20, sunX, sunY, 120);
+            lfGrd.addColorStop(0, `rgba(255,255,200,${vis * 0.15})`);
+            lfGrd.addColorStop(1, 'rgba(255,200,100,0)');
+            ctx.fillStyle = lfGrd;
+            ctx.fill();
+        }
+
+        // === UPDATE ===
+        function update(dt) {
+            if (!launched) return;
+
+            time += dt;
+            met += dt;
+
+            // Physics
+            let gravity = getGravity(rocketY);
+            let atmDensity = getAtmDensity(rocketY);
+            let drag = 0.5 * atmDensity * rocketVel * rocketVel * 0.001;
+            if (rocketVel > 0) drag = -drag;
+            else drag = Math.abs(drag);
+
+            let thrustForce = 0;
+            if (fuel > 0 && throttle > 0) {
+                thrustForce = 30 * (throttle / 100); // m/s² acceleration
+                fuel -= dt * (throttle / 100) * 1.2;
+                if (fuel < 0) fuel = 0;
+            }
+
+            let accel = thrustForce - gravity + drag;
+            rocketVel += accel * dt;
+            rocketY += rocketVel * dt;
+
+            if (rocketY < 0) {
+                rocketY = 0;
+                rocketVel = 0;
+            }
+
+            maxVel = Math.max(maxVel, Math.abs(rocketVel));
+
+            // Update phase
+            if (rocketVel > 0 && rocketY < TROPOSPHERE) phase = 'Ascension atmosphérique';
+            else if (rocketY >= TROPOSPHERE && rocketY < KARMAN_LINE) phase = 'Traversée haute atmosphère';
+            else if (rocketY >= KARMAN_LINE && rocketY < LOW_ORBIT) phase = 'Vol spatial';
+            else if (rocketY >= LOW_ORBIT && rocketY < DEEP_SPACE) phase = 'En orbite';
+            else if (rocketY >= DEEP_SPACE) phase = 'Espace profond';
+            if (fuel <= 0 && throttle > 0) phase = 'Vol balistique (plus de carburant)';
+
+            // Camera
+            cameraY = rocketY;
+
+            checkPhases();
+        }
+
+        // === UI ===
+        function updateUI() {
+            let metSign = launched ? 'T+' : 'T-';
+            let metMin = Math.floor(met / 60);
+            let metSec = Math.floor(met % 60);
+            document.getElementById('met').textContent =
+                `${metSign}${String(metMin).padStart(2, '0')}:${String(metSec).padStart(2, '0')}`;
+
+            let altStr;
+            if (rocketY < 1000) altStr = Math.floor(rocketY) + ' m';
+            else if (rocketY < 1000000) altStr = (rocketY / 1000).toFixed(1) + ' km';
+            else altStr = (rocketY / 1000000).toFixed(2) + ' Mm';
+
+            document.getElementById('altitude').textContent = altStr;
+            document.getElementById('speed').textContent = Math.floor(rocketVel);
+            document.getElementById('thrust').textContent = fuel > 0 ? throttle : 0;
+            document.getElementById('fuel').textContent = fuel.toFixed(1);
+            document.getElementById('temp').textContent = Math.floor(getTemperature(rocketY));
+            document.getElementById('phase').textContent = phase;
+            document.getElementById('zone').textContent = getZone(rocketY);
+
+            // Minimap
+            let maxAlt = DEEP_SPACE * 2;
+            let minimapPos = Math.min(92, (rocketY / maxAlt) * 90 + 2);
+            document.getElementById('minimap-rocket').style.bottom = minimapPos + '%';
+        }
+
+        // === MAIN LOOP ===
+        let lastTime = performance.now();
+
+        function gameLoop(now) {
+            let dt = Math.min((now - lastTime) / 1000, 0.05);
+            lastTime = now;
+
+            update(dt);
+
+            // Draw everything
+            drawSky();
+            drawNebulaBackground();
+            drawStars();
+            drawSun();
+            drawEarth();
+            drawClouds();
+
+            // Rocket screen position
+            let rocketScreenX = W / 2;
+            let rocketScreenYPos = H * 0.5;
+
+            // On ground before launch
+            if (!launched) {
+                let groundY = H * 0.85 - 5;
+                rocketScreenYPos = groundY - 50;
+            }
+
+            drawReentryEffect(rocketScreenX, rocketScreenYPos);
+            spawnExhaustParticles(rocketScreenX, rocketScreenYPos);
+            updateAndDrawParticles();
+            drawRocket(rocketScreenX, rocketScreenYPos);
+
+            // Speed lines effect
+            if (Math.abs(rocketVel) > 500) {
+                let intensity = Math.min(0.5, Math.abs(rocketVel) / 10000);
+                for (let i = 0; i < Math.min(20, Math.abs(rocketVel) / 200); i++) {
+                    let lx = Math.random() * W;
+                    let ly = Math.random() * H;
+                    let len = 20 + Math.abs(rocketVel) / 100;
+                    ctx.strokeStyle = `rgba(255,255,255,${intensity * Math.random()})`;
+                    ctx.lineWidth = 1;
+                    ctx.beginPath();
+                    ctx.moveTo(lx, ly);
+                    ctx.lineTo(lx, ly + len);
+                    ctx.stroke();
+                }
+            }
+
+            // Mach indicator
+            if (rocketVel > 343 && rocketVel < 5000 && rocketY < KARMAN_LINE) {
+                let machNum = (rocketVel / 343).toFixed(1);
+                ctx.fillStyle = 'rgba(255,255,0,0.7)';
+                ctx.font = 'bold 16px Courier New';
+                ctx.textAlign = 'center';
+                ctx.fillText(`MACH ${machNum}`, W / 2, rocketScreenYPos - 90);
+            }
+
+            updateUI();
+            requestAnimationFrame(gameLoop);
+        }
+
+        // === KEYBOARD CONTROLS ===
+        document.addEventListener('keydown', (e) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                if (!launched) launch();
+            }
+            if (e.code === 'ArrowUp') {
+                e.preventDefault();
+                throttle = Math.min(100, throttle + 5);
+                document.getElementById('throttle').value = throttle;
+                document.getElementById('throttle-val').textContent = throttle;
+            }
+            if (e.code === 'ArrowDown') {
+                e.preventDefault();
+                throttle = Math.max(0, throttle - 5);
+                document.getElementById('throttle').value = throttle;
+                document.getElementById('throttle-val').textContent = throttle;
+            }
+        });
+
+        requestAnimationFrame(gameLoop);
+    </script>
+</body>
+</html>

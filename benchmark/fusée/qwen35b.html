@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚀 Simulateur de Fusée</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(to bottom, #000020 0%, #000040 50%, #1a1a30 70%, #2d2d4d 100%);
+            min-height: 100vh;
+            overflow: hidden;
+            color: #fff;
+            position: relative;
+        }
+
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100vh;
+        }
+
+        #controls {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #4a90d9;
+            border-radius: 15px;
+            padding: 20px;
+            z-index: 1000;
+            min-width: 280px;
+        }
+
+        #controls h2 {
+            color: #4a90d9;
+            margin-bottom: 15px;
+            font-size: 24px;
+            text-align: center;
+        }
+
+        .stat-box {
+            background: rgba(74, 144, 217, 0.1);
+            border: 1px solid #4a90d9;
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 10px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 5px;
+        }
+
+        .stat-value {
+            font-size: 20px;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        .stat-unit {
+            font-size: 14px;
+            color: #888;
+        }
+
+        #launchBtn {
+            width: 100%;
+            padding: 15px;
+            margin-top: 15px;
+            font-size: 18px;
+            font-weight: bold;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        #launchBtn.launching {
+            background: linear-gradient(135deg, #f39c12, #e74c3c);
+            color: #fff;
+            animation: pulse 0.5s infinite;
+        }
+
+        #launchBtn:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+
+        #message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.9);
+            padding: 40px 60px;
+            border-radius: 20px;
+            border: 3px solid #4a90d9;
+            text-align: center;
+            z-index: 2000;
+            display: none;
+        }
+
+        #message h1 {
+            color: #4a90d9;
+            font-size: 48px;
+            margin-bottom: 20px;
+        }
+
+        #message p {
+            font-size: 24px;
+            margin-bottom: 30px;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #333;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 5px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3498db, #2ecc71);
+            transition: width 0.1s;
+        }
+
+        .fuel-fill {
+            background: linear-gradient(90deg, #f39c12, #e74c3c);
+        }
+
+        #atmosphereLevel {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #4a90d9;
+            border-radius: 15px;
+            padding: 15px 25px;
+            z-index: 1000;
+        }
+
+        #atmosphereLevel h3 {
+            color: #4a90d9;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        #atmosphereLevel div {
+            width: 200px;
+            height: 10px;
+            background: #333;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+
+        #atmosphereBar {
+            height: 100%;
+            background: linear-gradient(90deg, #3498db, #2ecc71);
+            transition: width 0.5s;
+        }
+
+        #achievements {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border: 2px solid #4a90d9;
+            border-radius: 15px;
+            padding: 15px;
+            z-index: 1000;
+            max-width: 300px;
+        }
+
+        #achievements h3 {
+            color: #4a90d9;
+            margin-bottom: 10px;
+            font-size: 16px;
+        }
+
+        #achievementList {
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .achievement {
+            padding: 8px;
+            margin: 5px 0;
+            background: rgba(74, 144, 217, 0.2);
+            border-radius: 5px;
+            border-left: 3px solid #4a90d9;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="controls">
+        <h2>🚀 Fusée</h2>
+        
+        <div class="stat-box">
+            <div class="stat-label">ALTITUDE</div>
+            <span class="stat-value" id="altitude">0</span>
+            <span class="stat-unit"> m</span>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">VITESSE</div>
+            <span class="stat-value" id="velocity">0</span>
+            <span class="stat-unit"> m/s</span>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">FUEL</div>
+            <div class="progress-bar">
+                <div class="progress-fill fuel-fill" id="fuelBar" style="width: 100%;"></div>
+            </div>
+            <span class="stat-value" id="fuel">100</span><span class="stat-unit"> %</span>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">MASSE</div>
+            <span class="stat-value" id="mass">1000</span>
+            <span class="stat-unit"> kg</span>
+        </div>
+
+        <div class="stat-box">
+            <div class="stat-label">G-FACTOR</div>
+            <span class="stat-value" id="gForce">1.0</span>
+            <span class="stat-unit"> G</span>
+        </div>
+
+        <button id="launchBtn" onclick="launchRocket()">🚀 DÉCOLLER</button>
+    </div>
+
+    <div id="atmosphereLevel">
+        <h3>🌍 Niveau d'Atmosphère</h3>
+        <div>
+            <div id="atmosphereBar" style="width: 100%;"></div>
+        </div>
+        <div style="margin-top: 5px; font-size: 12px; color: #888;" id="atmosphereText">Surface</div>
+    </div>
+
+    <div id="achievements">
+        <h3>🏆 Records</h3>
+        <div id="achievementList">
+            <div class="achievement">Altitude max: <span id="maxAltitude">0</span> m</div>
+            <div class="achievement">Vitesse max: <span id="maxVelocity">0</span> m/s</div>
+        </div>
+    </div>
+
+    <div id="message">
+        <h1 id="msgTitle">FUSÉE DÉCOLLÉE !</h1>
+        <p id="msgText">Vous avez atteint l'espace !</p>
+        <button onclick="resetSimulation()" style="padding: 15px 30px; font-size: 18px; background: #4a90d9; color: #fff; border: none; border-radius: 10px; cursor: pointer;">🔄 Rejouer</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        const SPACE_ALTITUDE = 100000;
+        const ATMOSPHERE_ALTITUDE = 10000;
+        const MAX_ALTITUDE = 500000;
+
+        let rocket = {
+            y: canvas.height - 100,
+            velocity: 0,
+            acceleration: 0,
+            fuel: 100,
+            maxFuel: 100,
+            mass: 1000,
+            initialMass: 1000,
+            thrust: 0,
+            isLaunching: false,
+            isLanded: false
+        };
+
+        let stars = [];
+        let clouds = [];
+        let particles = [];
+        let rockets = [];
+
+        let maxAltitude = 0;
+        let maxVelocity = 0;
+        let altitudeReachedSpace = false;
+        let reachedOrbit = false;
+
+        function init() {
+            generateStars();
+            generateClouds();
+            animate();
+        }
+
+        function generateStars() {
+            stars = [];
+            for (let i = 0; i < 200; i++) {
+                stars.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height,
+                    size: Math.random() * 2 + 0.5,
+                    brightness: Math.random()
+                });
+            }
+        }
+
+        function generateClouds() {
+            clouds = [];
+            for (let i = 0; i < 30; i++) {
+                clouds.push({
+                    x: Math.random() * canvas.width,
+                    y: Math.random() * canvas.height * 0.6,
+                    size: Math.random() * 80 + 40,
+                    opacity: Math.random() * 0.5 + 0.2
+                });
+            }
+        }
+
+        function createParticle(x, y, type = 'smoke') {
+            particles.push({
+                x: x,
+                y: y,
+                vx: (Math.random() - 0.5) * 3,
+                vy: (Math.random() - 0.5) * 3,
+                size: Math.random() * 8 + 4,
+                type: type,
+                life: 1.0
+            });
+        }
+
+        function drawRocket(scale = 1) {
+            const x = canvas.width / 2;
+            const y = canvas.height - 100 - (rocket.y - (canvas.height - 100)) * scale;
+
+            ctx.save();
+            ctx.translate(x, y);
+
+            // Flame
+            if (rocket.isLaunching && rocket.fuel > 0) {
+                const flameLength = Math.random() * 50 + 30;
+                const flameColor = `hsl(${Math.random() * 60 + 10}, 100%, ${Math.random() * 50 + 30}%)`;
+                
+                ctx.fillStyle = flameColor;
+                ctx.beginPath();
+                ctx.moveTo(-15, 40);
+                ctx.lineTo(15, 40);
+                ctx.lineTo(0, 40 + flameLength);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            // Rocket Body
+            const bodyWidth = 30 * scale;
+            const bodyHeight = 80 * scale;
+
+            // Main body
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(-bodyWidth/2, -bodyHeight/2, bodyWidth, bodyHeight);
+
+            // Nose cone
+            ctx.fillStyle = '#e74c3c';
+            ctx.beginPath();
+            ctx.moveTo(-bodyWidth/2, -bodyHeight/2);
+            ctx.lineTo(bodyWidth/2, -bodyHeight/2);
+            ctx.lineTo(0, -bodyHeight/2 - 25 * scale);
+            ctx.closePath();
+            ctx.fill();
+
+            // Fins
+            ctx.fillStyle = '#c0392b';
+            for (let i = 0; i < 3; i++) {
+                const angle = (i * 2 * Math.PI) / 3 - Math.PI/2;
+                ctx.beginPath();
+                ctx.moveTo(-bodyWidth/4, bodyHeight/4);
+                ctx.lineTo(-bodyWidth/2 - 15 * scale, bodyHeight/2);
+                ctx.lineTo(bodyWidth/4, bodyHeight/4);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            // Windows
+            ctx.fillStyle = '#3498db';
+            ctx.beginPath();
+            ctx.arc(0, -10 * scale, 8 * scale, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+        }
+
+        function drawBackground(altitudeScale) {
+            const atmosphere = Math.min(1, rocket.y / ATMOSPHERE_ALTITUDE);
+
+            // Stars
+            ctx.fillStyle = '#fff';
+            stars.forEach(star => {
+                const starAlpha = Math.min(1, altitudeScale * star.brightness);
+                ctx.globalAlpha = starAlpha;
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            ctx.globalAlpha = 1;
+
+            // Atmospheric glow
+            if (altitude < ATMOSPHERE_ALTITUDE) {
+                const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+                const alpha = 1 - (rocket.y / ATMOSPHERE_ALTITUDE);
+                gradient.addColorStop(0, `rgba(52, 152, 219, ${alpha * 0.3})`);
+                gradient.addColorStop(1, 'rgba(52, 152, 219, 0)');
+                ctx.fillStyle = gradient;
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+            }
+
+            // Ground
+            const groundHeight = canvas.height * 0.1;
+            const groundY = canvas.height - groundHeight;
+
+            if (rocket.y < groundY) {
+                ctx.fillStyle = '#2c5e2e';
+                ctx.fillRect(0, groundY, canvas.width, groundHeight);
+
+                // Ground details
+                ctx.fillStyle = '#1e4d20';
+                for (let i = 0; i < 50; i++) {
+                    const x = (i * 80) % canvas.width;
+                    const height = Math.sin(i * 137) * 20 + 10;
+                    ctx.beginPath();
+                    ctx.moveTo(x, groundY);
+                    ctx.lineTo(x + 20, groundY - height);
+                    ctx.lineTo(x + 40, groundY);
+                    ctx.closePath();
+                    ctx.fill();
+                }
+            }
+
+            // Launch tower
+            if (rocket.y < canvas.height - 50) {
+                ctx.fillStyle = '#7f8c8d';
+                ctx.fillRect(canvas.width/2 - 30, canvas.height - 80, 60, 80);
+                
+                // Tower details
+                ctx.strokeStyle = '#95a5a6';
+                ctx.lineWidth = 2;
+                for (let i = 0; i < 5; i++) {
+                    ctx.beginPath();
+                    ctx.moveTo(canvas.width/2 - 20, canvas.height - 70 + i * 15);
+                    ctx.lineTo(canvas.width/2 + 20, canvas.height - 70 + i * 15);
+                    ctx.stroke();
+                }
+            }
+        }
+
+        function drawParticles() {
+            particles.forEach((p, index) => {
+                ctx.globalAlpha = p.life;
+                
+                if (p.type === 'smoke') {
+                    ctx.fillStyle = `rgba(200, 200, 200, ${p.life})`;
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+                
+                particles[index].x += p.vx;
+                particles[index].y += p.vy;
+                particles[index].size *= 0.98;
+                particles[index].life -= 0.02;
+
+                if (particles[index].life <= 0) {
+                    particles.splice(index, 1);
+                }
+            });
+            ctx.globalAlpha = 1;
+        }
+
+        function updatePhysics() {
+            if (!rocket.isLaunching) return;
+
+            const gravity = 9.8;
+            const airResistance = Math.exp(-rocket.y / ATMOSPHERE_ALTITUDE) * 0.0001;
+            const fuelConsumption = 0.5;
+
+            if (rocket.fuel > 0 && rocket.isLaunching) {
+                rocket.thrust = 15000;
+                rocket.fuel -= fuelConsumption;
+            } else {
+                rocket.thrust = 0;
+                rocket.isLaunching = false;
+            }
+
+            const netForce = rocket.thrust - (rocket.mass * gravity) - (rocket.velocity * airResistance);
+            rocket.acceleration = netForce / rocket.mass;
+            rocket.velocity += rocket.acceleration * 0.016;
+
+            if (rocket.velocity > 0 || rocket.y < canvas.height - 100) {
+                rocket.y += rocket.velocity * 0.016;
+            }
+
+            // Mass decreases with fuel
+            rocket.mass = rocket.initialMass - (rocket.initialMass * (1 - rocket.fuel / 100)) * 0.5;
+
+            // Check achievements
+            if (rocket.y > maxAltitude) {
+                maxAltitude = rocket.y;
+                document.getElementById('maxAltitude').textContent = Math.round(maxAltitude).toLocaleString();
+            }
+
+            const velocityAbs = Math.abs(rocket.velocity);
+            if (velocityAbs > maxVelocity) {
+                maxVelocity = velocityAbs;
+                document.getElementById('maxVelocity').textContent = Math.round(maxVelocity).toLocaleString();
+            }
+
+            // Space achievement
+            if (rocket.y >= SPACE_ALTITUDE && !altitudeReachedSpace) {
+                altitudeReachedSpace = true;
+                showMessage("ESPACE ATTEINT !", "Vous avez quitté l'atmosphère terrestre 🌌");
+            }
+
+            // Orbit achievement
+            if (rocket.velocity > 7800 && rocket.y > SPACE_ALTITUDE && !reachedOrbit) {
+                reachedOrbit = true;
+                showMessage("ORBITE ATTEINTE !", "Vitesse orbitale maintenue 🛰️");
+            }
+
+            // Max altitude reached
+            if (rocket.velocity <= 0 && rocket.y < canvas.height - 100 && rocket.isLaunching) {
+                rocket.isLaunching = false;
+            }
+
+            // Reset if out of fuel
+            if (rocket.fuel <= 0 && rocket.velocity > 0) {
+                rocket.isLaunching = false;
+            }
+
+            // Particle emission
+            if (rocket.fuel > 0 && rocket.isLaunching) {
+                for (let i = 0; i < 3; i++) {
+                    createParticle(canvas.width/2, canvas.height - 50);
+                }
+            }
+
+            // Update UI
+            document.getElementById('altitude').textContent = Math.round(rocket.y).toLocaleString();
+            document.getElementById('velocity').textContent = Math.round(rocket.velocity).toLocaleString();
+            document.getElementById('fuel').textContent = Math.round(rocket.fuel);
+            document.getElementById('fuelBar').style.width = rocket.fuel + '%';
+            document.getElementById('mass').textContent = Math.round(rocket.mass).toLocaleString();
+            
+            const gForce = (rocket.thrust / (rocket.mass * gravity)) + 1;
+            document.getElementById('gForce').textContent = gForce.toFixed(2);
+
+            // Atmosphere level
+            const atmLevel = Math.max(0, 1 - rocket.y / ATMOSPHERE_ALTITUDE);
+            document.getElementById('atmosphereBar').style.width = atmLevel * 100 + '%';
+            
+            if (atmLevel >= 0.8) {
+                document.getElementById('atmosphereText').textContent = 'Surface';
+            } else if (atmLevel >= 0.5) {
+                document.getElementById('atmosphereText').textContent = 'Troposphère';
+            } else if (atmLevel >= 0.2) {
+                document.getElementById('atmosphereText').textContent = 'Stratosphère';
+            } else if (atmLevel > 0) {
+                document.getElementById('atmosphereText').textContent = 'Mésosphère';
+            } else {
+                document.getElementById('atmosphereText').textContent = 'Espace';
+            }
+        }
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            const altitudeScale = Math.min(1, (rocket.y - 5000) / 20000);
+
+            drawBackground(altitudeScale);
+            drawParticles();
+            drawRocket(1 + altitudeScale * 0.5);
+
+            updatePhysics();
+
+            requestAnimationFrame(animate);
+        }
+
+        function launchRocket() {
+            if (rocket.isLaunching || rocket.fuel <= 0) return;
+
+            rocket.isLaunching = true;
+            rocket.velocity = 5;
+            document.getElementById('launchBtn').classList.add('launching');
+            document.getElementById('launchBtn').disabled = true;
+        }
+
+        function resetSimulation() {
+            rocket = {
+                y: canvas.height - 100,
+                velocity: 0,
+                acceleration: 0,
+                fuel: 100,
+                maxFuel: 100,
+                mass: 1000,
+                initialMass: 1000,
+                thrust: 0,
+                isLaunching: false,
+                isLanded: false
+            };
+
+            particles = [];
+            maxAltitude = 0;
+            maxVelocity = 0;
+            altitudeReachedSpace = false;
+            reachedOrbit = false;
+
+            document.getElementById('launchBtn').classList.remove('launching');
+            document.getElementById('launchBtn').disabled = false;
+            document.getElementById('message').style.display = 'none';
+            document.getElementById('maxAltitude').textContent = '0';
+            document.getElementById('maxVelocity').textContent = '0';
+
+            generateStars();
+            generateClouds();
+        }
+
+        function showMessage(title, text) {
+            const msg = document.getElementById('message');
+            document.getElementById('msgTitle').textContent = title;
+            document.getElementById('msgText').textContent = text;
+            msg.style.display = 'block';
+
+            setTimeout(() => {
+                msg.style.display = 'none';
+            }, 5000);
+        }
+
+        init();
+    </script>
+</body>
+</html>

@@ -1,0 +1,2494 @@
+import { startTransition, useEffect, useRef, useState } from 'react'
+import './App.css'
+
+const DEFAULT_MODEL_KEY = 'e4b'
+const DEFAULT_QUANTIZATION_KEY = 'bf16'
+const DEFAULT_SYSTEM_PROMPT =
+  'You are Gemma 4 running locally on a workstation. Be concise, technical, and explicit about what can be inferred from the provided media.'
+
+const PROMPT_PRESETS = [
+  {
+    title: 'Vision',
+    icon: 'image_search',
+    prompt: 'Decris cette image et cite tout texte visible.',
+  },
+  {
+    title: 'Audio',
+    icon: 'graphic_eq',
+    prompt: 'Transcris cet audio en une seule ligne.',
+  },
+  {
+    title: 'Cross-check',
+    icon: 'compare_arrows',
+    prompt:
+      'Analyse l image puis l audio et dis si les deux racontent la meme chose.',
+  },
+]
+
+const DEFAULT_LIVE_PROMPT =
+  'Use the attached camera frame and microphone audio as the current live turn. Reply conversationally, like a concise video call copilot.'
+
+function mergeAudioSamples(chunks, totalLength) {
+  const merged = new Float32Array(totalLength)
+  let offset = 0
+
+  chunks.forEach((chunk) => {
+    merged.set(chunk, offset)
+    offset += chunk.length
+  })
+
+  return merged
+}
+
+function writeWavString(view, offset, value) {
+  for (let index = 0; index < value.length; index += 1) {
+    view.setUint8(offset + index, value.charCodeAt(index))
+  }
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2)
+  const view = new DataView(buffer)
+
+  writeWavString(view, 0, 'RIFF')
+  view.setUint32(4, 36 + samples.length * 2, true)
+  writeWavString(view, 8, 'WAVE')
+  writeWavString(view, 12, 'fmt ')
+  view.setUint32(16, 16, true)
+  view.setUint16(20, 1, true)
+  view.setUint16(22, 1, true)
+  view.setUint32(24, sampleRate, true)
+  view.setUint32(28, sampleRate * 2, true)
+  view.setUint16(32, 2, true)
+  view.setUint16(34, 16, true)
+  writeWavString(view, 36, 'data')
+  view.setUint32(40, samples.length * 2, true)
+
+  let offset = 44
+  for (let index = 0; index < samples.length; index += 1) {
+    const sample = Math.max(-1, Math.min(1, samples[index]))
+    view.setInt16(
+      offset,
+      sample < 0 ? sample * 0x8000 : sample * 0x7fff,
+      true,
+    )
+    offset += 2
+  }
+
+  return new Blob([buffer], { type: 'audio/wav' })
+}
+
+function stopStreamTracks(stream) {
+  if (!stream) {
+    return
+  }
+
+  stream.getTracks().forEach((track) => track.stop())
+}
+
+function captureVideoFrame(videoElement) {
+  return new Promise((resolve, reject) => {
+    if (!videoElement || videoElement.readyState < 2) {
+      reject(new Error('Camera preview is not ready yet.'))
+      return
+    }
+
+    const canvas = document.createElement('canvas')
+    canvas.width = videoElement.videoWidth
+    canvas.height = videoElement.videoHeight
+
+    const context = canvas.getContext('2d')
+    if (!context) {
+      reject(new Error('Unable to capture the current camera frame.'))
+      return
+    }
+
+    context.drawImage(videoElement, 0, 0, canvas.width, canvas.height)
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Unable to encode the current camera frame.'))
+          return
+        }
+
+        resolve(
+          new File([blob], `live-frame-${Date.now()}.jpg`, {
+            type: 'image/jpeg',
+          }),
+        )
+      },
+      'image/jpeg',
+      0.92,
+    )
+  })
+}
+
+function stopAudioPlayback(audioRef) {
+  const activeAudio = audioRef.current
+  if (!activeAudio) {
+    return
+  }
+
+  activeAudio.onplay = null
+  activeAudio.onended = null
+  activeAudio.onerror = null
+  activeAudio.pause()
+  activeAudio.currentTime = 0
+  audioRef.current = null
+}
+
+async function playGeneratedAudio(audioPayload, audioRef, onStart, onEnd, onError) {
+  if (!audioPayload?.url) {
+    return false
+  }
+
+  stopAudioPlayback(audioRef)
+
+  const playback = new Audio(audioPayload.url)
+  playback.preload = 'auto'
+  audioRef.current = playback
+
+  playback.onplay = () => onStart?.()
+  playback.onended = () => {
+    if (audioRef.current === playback) {
+      audioRef.current = null
+    }
+    onEnd?.()
+  }
+  playback.onerror = () => {
+    if (audioRef.current === playback) {
+      audioRef.current = null
+    }
+    onError?.()
+  }
+
+  try {
+    await playback.play()
+    return true
+  } catch {
+    if (audioRef.current === playback) {
+      audioRef.current = null
+    }
+    onError?.()
+    return false
+  }
+}
+
+async function parseApiPayload(response) {
+  const raw = await response.text()
+
+  if (!raw) {
+    return {}
+  }
+
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return {
+      detail: raw.trim() || `HTTP ${response.status}`,
+    }
+  }
+}
+
+function formatElapsed(milliseconds) {
+  if (!milliseconds) {
+    return 'n/a'
+  }
+
+  return milliseconds >= 1000
+    ? `${(milliseconds / 1000).toFixed(1)} s`
+    : `${Math.round(milliseconds)} ms`
+}
+
+function formatMemory(value) {
+  return value ? `${value.toFixed(2)} GiB` : '0.00 GiB'
+}
+
+function getModelMemoryEstimate(model, quantizationKey) {
+  if (!model?.memory_requirements_gib || !quantizationKey) {
+    return null
+  }
+
+  const value = model.memory_requirements_gib[quantizationKey]
+  return typeof value === 'number' ? value : null
+}
+
+function getQuantizationRuntimeLabel(quantization) {
+  if (!quantization) {
+    return 'Unknown runtime'
+  }
+
+  return quantization.runtime_supported ? 'Available here' : 'Planning only'
+}
+
+function formatMessageTime(value) {
+  if (!value) {
+    return '--:--'
+  }
+
+  return new Intl.DateTimeFormat('fr-FR', {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(value)
+}
+
+function makeAttachmentSummary(imageFile, audioFile) {
+  const labels = []
+
+  if (imageFile) {
+    labels.push(`image: ${imageFile.name}`)
+  }
+
+  if (audioFile) {
+    labels.push(`audio: ${audioFile.name}`)
+  }
+
+  return labels.join(' | ')
+}
+
+function makeAttachmentLabels(modelLabel, imageFile, audioFile) {
+  const labels = [modelLabel]
+
+  if (imageFile) {
+    labels.push(`Image: ${imageFile.name}`)
+  }
+
+  if (audioFile) {
+    labels.push(`Audio: ${audioFile.name}`)
+  }
+
+  return labels.filter(Boolean)
+}
+
+function makeFallbackPrompt(prompt, imageFile, audioFile) {
+  const trimmed = prompt.trim()
+  if (trimmed) {
+    return trimmed
+  }
+
+  if (imageFile && audioFile) {
+    return 'Decris l image et transcris l audio.'
+  }
+
+  if (imageFile) {
+    return 'Decris cette image.'
+  }
+
+  if (audioFile) {
+    return 'Transcris cet audio.'
+  }
+
+  return ''
+}
+
+function makeThreadTitle(prompt, imageFile, audioFile) {
+  const trimmed = prompt.trim().replace(/\s+/g, ' ')
+
+  if (trimmed) {
+    return trimmed.length > 40 ? `${trimmed.slice(0, 40).trimEnd()}...` : trimmed
+  }
+
+  if (imageFile && audioFile) {
+    return 'Image and audio test'
+  }
+
+  if (imageFile) {
+    return 'Image test'
+  }
+
+  if (audioFile) {
+    return 'Audio test'
+  }
+
+  return 'New Chat'
+}
+
+function createThread(title) {
+  const now = Date.now()
+  return {
+    id: crypto.randomUUID(),
+    title,
+    createdAt: now,
+    updatedAt: now,
+    messages: [],
+  }
+}
+
+function createInitialWorkspace() {
+  const firstThread = createThread('New Chat')
+  return {
+    threads: [firstThread],
+    activeThreadId: firstThread.id,
+  }
+}
+
+function updateThreadInList(currentThreads, threadId, updater) {
+  const nextThreads = []
+  let updatedThread = null
+
+  currentThreads.forEach((thread) => {
+    if (thread.id === threadId) {
+      updatedThread = updater(thread)
+      return
+    }
+
+    nextThreads.push(thread)
+  })
+
+  return updatedThread ? [updatedThread, ...nextThreads] : currentThreads
+}
+
+function getGreeting() {
+  const hour = new Date().getHours()
+
+  if (hour < 12) {
+    return 'Good morning'
+  }
+
+  if (hour < 18) {
+    return 'Good afternoon'
+  }
+
+  return 'Good evening'
+}
+
+function getThreadSubtitle(thread) {
+  const latestMessage = thread.messages[thread.messages.length - 1]
+
+  if (!latestMessage) {
+    return 'Ready for local inference'
+  }
+
+  if (latestMessage.role === 'assistant' && latestMessage.meta) {
+    return `${latestMessage.meta.active_model?.label || 'Gemma 4'} / ${
+      latestMessage.meta.active_quantization?.label || 'BF16'
+    } / ${formatElapsed(latestMessage.meta.elapsed_ms)}`
+  }
+
+  if (latestMessage.attachmentLabels?.length) {
+    return latestMessage.attachmentLabels.slice(0, 2).join(' | ')
+  }
+
+  const compact = latestMessage.content.replace(/\s+/g, ' ')
+  return compact.length > 44 ? `${compact.slice(0, 44).trimEnd()}...` : compact
+}
+
+function getAssistantChips(message) {
+  if (!message.meta) {
+    return []
+  }
+
+  const chips = []
+  const activeModel = message.meta.active_model
+
+  if (activeModel?.label) {
+    chips.push(activeModel.label)
+  }
+
+  if (activeModel?.architecture) {
+    chips.push(activeModel.architecture)
+  }
+
+  if (message.meta.elapsed_ms) {
+    chips.push(formatElapsed(message.meta.elapsed_ms))
+  }
+
+  if (typeof message.meta.generated_tokens === 'number') {
+    chips.push(`${message.meta.generated_tokens} new tokens`)
+  }
+
+  if (message.meta.tts_audio?.voice) {
+    chips.push(`Voice: ${message.meta.tts_audio.voice}`)
+  }
+
+  if (message.meta.active_quantization?.label) {
+    chips.push(message.meta.active_quantization.label)
+  }
+
+  return chips
+}
+
+function App() {
+  const initialWorkspaceRef = useRef(createInitialWorkspace())
+  const imageInputRef = useRef(null)
+  const audioInputRef = useRef(null)
+  const logRef = useRef(null)
+  const modelPickerRef = useRef(null)
+  const quantizationPickerRef = useRef(null)
+  const liveStageRef = useRef(null)
+  const liveVideoRef = useRef(null)
+  const liveStreamRef = useRef(null)
+  const liveAudioContextRef = useRef(null)
+  const liveAudioSourceRef = useRef(null)
+  const liveAudioProcessorRef = useRef(null)
+  const liveAudioSinkRef = useRef(null)
+  const liveAudioChunksRef = useRef([])
+  const liveAudioLengthRef = useRef(0)
+  const playbackAudioRef = useRef(null)
+
+  const [threads, setThreads] = useState(initialWorkspaceRef.current.threads)
+  const [activeThreadId, setActiveThreadId] = useState(
+    initialWorkspaceRef.current.activeThreadId,
+  )
+  const [models, setModels] = useState([])
+  const [quantizations, setQuantizations] = useState([])
+  const [docsNote, setDocsNote] = useState('')
+  const [quantizationNote, setQuantizationNote] = useState('')
+  const [prompt, setPrompt] = useState('')
+  const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT)
+  const [selectedModelKey, setSelectedModelKey] = useState(DEFAULT_MODEL_KEY)
+  const [selectedQuantizationKey, setSelectedQuantizationKey] = useState(
+    DEFAULT_QUANTIZATION_KEY,
+  )
+  const [imageFile, setImageFile] = useState(null)
+  const [audioFile, setAudioFile] = useState(null)
+  const [imagePreview, setImagePreview] = useState('')
+  const [audioPreview, setAudioPreview] = useState('')
+  const [health, setHealth] = useState(null)
+  const [error, setError] = useState('')
+  const [isSending, setIsSending] = useState(false)
+  const [isLoadingModel, setIsLoadingModel] = useState(false)
+  const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
+  const [isQuantizationMenuOpen, setIsQuantizationMenuOpen] = useState(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+  const [viewMode, setViewMode] = useState('text')
+  const [livePrompt, setLivePrompt] = useState(DEFAULT_LIVE_PROMPT)
+  const [liveStatus, setLiveStatus] = useState('Live mode idle.')
+  const [liveError, setLiveError] = useState('')
+  const [isLiveSessionActive, setIsLiveSessionActive] = useState(false)
+  const [isLiveRecording, setIsLiveRecording] = useState(false)
+  const [isLiveSubmitting, setIsLiveSubmitting] = useState(false)
+  const [isLiveFullscreen, setIsLiveFullscreen] = useState(false)
+  const [autoSpeak, setAutoSpeak] = useState(true)
+  const [isSpeaking, setIsSpeaking] = useState(false)
+  const [settings, setSettings] = useState({
+    maxNewTokens: 256,
+    temperature: 1,
+    topP: 0.95,
+    topK: 64,
+    thinking: false,
+  })
+
+  const activeThread =
+    threads.find((thread) => thread.id === activeThreadId) ?? threads[0] ?? null
+  const messages = activeThread?.messages ?? []
+  const latestAssistantMessage = [...messages]
+    .reverse()
+    .find((message) => message.role === 'assistant' && message.meta)
+  const selectedModel =
+    models.find((model) => model.key === selectedModelKey) ?? null
+  const selectedQuantization =
+    quantizations.find((quantization) => quantization.key === selectedQuantizationKey) ??
+    null
+  const activeModel = health?.active_model ?? null
+  const activeQuantization = health?.active_quantization ?? null
+  const supportsAudio = selectedModel?.supports_audio ?? true
+  const supportsImage = selectedModel?.supports_image ?? true
+  const modalityBadges = selectedModel ? selectedModel.supported_modalities : []
+  const selectedMemoryEstimate = getModelMemoryEstimate(
+    selectedModel,
+    selectedQuantizationKey,
+  )
+  const activeMemoryEstimate = getModelMemoryEstimate(
+    activeModel,
+    activeQuantization?.key,
+  )
+  const modelSwitchPending =
+    Boolean(health?.loaded) &&
+    (activeModel?.key !== selectedModelKey ||
+      activeQuantization?.key !== selectedQuantizationKey)
+  const greeting = getGreeting()
+  const activeThreadSubtitle = activeThread
+    ? getThreadSubtitle(activeThread)
+    : 'Ready for local inference'
+  const quantizationRuntimeSupported =
+    selectedQuantization?.runtime_supported ?? false
+  const supportsNativeLiveAudio =
+    quantizationRuntimeSupported &&
+    supportsAudio &&
+    ['e2b', 'e4b'].includes(selectedModelKey)
+  const latestTurns = messages.slice(-4)
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImagePreview('')
+      return
+    }
+
+    const objectUrl = URL.createObjectURL(imageFile)
+    setImagePreview(objectUrl)
+
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [imageFile])
+
+  useEffect(() => {
+    if (!audioFile) {
+      setAudioPreview('')
+      return
+    }
+
+    const objectUrl = URL.createObjectURL(audioFile)
+    setAudioPreview(objectUrl)
+
+    return () => URL.revokeObjectURL(objectUrl)
+  }, [audioFile])
+
+  useEffect(() => () => stopAudioPlayback(playbackAudioRef), [])
+
+  useEffect(() => {
+    if (!supportsAudio && audioFile) {
+      setAudioFile(null)
+      setError(
+        `${
+          selectedModel?.label || 'This model'
+        } does not accept audio input in the official modality tables.`,
+      )
+    }
+  }, [audioFile, selectedModel, supportsAudio])
+
+  useEffect(() => {
+    let isActive = true
+
+    async function bootstrap() {
+      try {
+        const [healthResponse, modelsResponse] = await Promise.all([
+          fetch('/api/health'),
+          fetch('/api/models'),
+        ])
+
+        if (!healthResponse.ok || !modelsResponse.ok) {
+          throw new Error('Local API unavailable.')
+        }
+
+        const [healthData, modelsData] = await Promise.all([
+          parseApiPayload(healthResponse),
+          parseApiPayload(modelsResponse),
+        ])
+
+        if (!healthResponse.ok || !modelsResponse.ok) {
+          throw new Error(
+            healthData.detail || modelsData.detail || 'Local API unavailable.',
+          )
+        }
+
+        if (!isActive) {
+          return
+        }
+
+        startTransition(() => {
+          setHealth(healthData)
+          setModels(modelsData.models)
+          setDocsNote(modelsData.docs_note)
+          setQuantizations(modelsData.quantizations || [])
+          setQuantizationNote(modelsData.quantization_note || '')
+          setSelectedModelKey(
+            healthData.active_model_key ||
+              modelsData.active_model_key ||
+              modelsData.default_model_key ||
+              DEFAULT_MODEL_KEY,
+          )
+          setSelectedQuantizationKey(
+            healthData.active_quantization_key ||
+              modelsData.active_quantization_key ||
+              modelsData.default_quantization_key ||
+              DEFAULT_QUANTIZATION_KEY,
+          )
+        })
+      } catch {
+        if (!isActive) {
+          return
+        }
+
+        startTransition(() => {
+          setHealth(null)
+          setModels([])
+          setQuantizations([])
+        })
+      }
+    }
+
+    async function pollHealth() {
+      try {
+        const response = await fetch('/api/health')
+        if (!response.ok) {
+          throw new Error('Local API unavailable.')
+        }
+
+        const data = await parseApiPayload(response)
+        if (isActive) {
+          startTransition(() => {
+            setHealth(data)
+          })
+        }
+      } catch {
+        if (isActive) {
+          startTransition(() => {
+            setHealth(null)
+          })
+        }
+      }
+    }
+
+    bootstrap()
+    const timer = window.setInterval(pollHealth, 5000)
+
+    return () => {
+      isActive = false
+      window.clearInterval(timer)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!logRef.current) {
+      return
+    }
+
+    logRef.current.scrollTo({
+      top: logRef.current.scrollHeight,
+      behavior: 'smooth',
+    })
+  }, [messages.length, isSending, activeThreadId])
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (
+        isModelMenuOpen &&
+        modelPickerRef.current &&
+        !modelPickerRef.current.contains(event.target)
+      ) {
+        setIsModelMenuOpen(false)
+      }
+
+      if (
+        isQuantizationMenuOpen &&
+        quantizationPickerRef.current &&
+        !quantizationPickerRef.current.contains(event.target)
+      ) {
+        setIsQuantizationMenuOpen(false)
+      }
+    }
+
+    function handleEscape(event) {
+      if (event.key === 'Escape') {
+        setIsModelMenuOpen(false)
+        setIsQuantizationMenuOpen(false)
+        setIsSettingsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    window.addEventListener('keydown', handleEscape)
+
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown)
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [isModelMenuOpen, isQuantizationMenuOpen])
+
+  useEffect(() => {
+    function handleFullscreenChange() {
+      setIsLiveFullscreen(Boolean(document.fullscreenElement))
+    }
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange)
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange)
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      stopAudioPlayback(playbackAudioRef)
+      void teardownLiveRecorder()
+      stopStreamTracks(liveStreamRef.current)
+    }
+  }, [])
+
+  async function refreshModelsAndHealth() {
+    const [healthResponse, modelsResponse] = await Promise.all([
+      fetch('/api/health'),
+      fetch('/api/models'),
+    ])
+
+    if (!healthResponse.ok || !modelsResponse.ok) {
+      throw new Error('Unable to refresh local lab state.')
+    }
+
+    const [healthData, modelsData] = await Promise.all([
+      parseApiPayload(healthResponse),
+      parseApiPayload(modelsResponse),
+    ])
+
+    startTransition(() => {
+      setHealth(healthData)
+      setModels(modelsData.models)
+      setDocsNote(modelsData.docs_note)
+      setQuantizations(modelsData.quantizations || [])
+      setQuantizationNote(modelsData.quantization_note || '')
+    })
+  }
+
+  async function runTurn({
+    promptText,
+    imageAsset = null,
+    audioAsset = null,
+    visibleText = promptText,
+    titleHint = null,
+    mode = 'text',
+    clearComposer = false,
+  }) {
+    if (!activeThread) {
+      return null
+    }
+
+    if (!quantizationRuntimeSupported) {
+      const detail =
+        selectedQuantization?.doc_summary ||
+        'This quantization is visible for planning only in the current backend.'
+      setError(detail)
+      if (mode === 'live') {
+        setLiveError(detail)
+      }
+      return null
+    }
+
+    const setBusy = mode === 'live' ? setIsLiveSubmitting : setIsSending
+    setBusy(true)
+    setError('')
+
+    if (mode === 'live') {
+      setLiveError('')
+    }
+
+    const threadId = activeThread.id
+    const pendingUserMessage = {
+      id: crypto.randomUUID(),
+      role: 'user',
+      content: visibleText,
+      createdAt: Date.now(),
+      attachmentLabels: makeAttachmentLabels(
+        selectedModel?.label || selectedModelKey,
+        imageAsset,
+        audioAsset,
+      ),
+      attachments: makeAttachmentSummary(imageAsset, audioAsset),
+    }
+
+    startTransition(() => {
+      setThreads((current) =>
+        updateThreadInList(current, threadId, (thread) => ({
+          ...thread,
+          title:
+            thread.messages.length === 0
+              ? titleHint || makeThreadTitle(visibleText, imageAsset, audioAsset)
+              : thread.title,
+          updatedAt: Date.now(),
+          messages: [...thread.messages, pendingUserMessage],
+        })),
+      )
+    })
+
+    const historyPayload = messages.slice(-8).map((message) => ({
+      role: message.role,
+      content: message.content,
+    }))
+
+    const formData = new FormData()
+    formData.set('model_key', selectedModelKey)
+    formData.set('quantization_key', selectedQuantizationKey)
+    formData.set('prompt', promptText)
+    formData.set('system_prompt', systemPrompt)
+    formData.set('history_json', JSON.stringify(historyPayload))
+    formData.set('max_new_tokens', String(settings.maxNewTokens))
+    formData.set('temperature', String(settings.temperature))
+    formData.set('top_p', String(settings.topP))
+    formData.set('top_k', String(settings.topK))
+    formData.set('thinking', String(settings.thinking))
+    formData.set('tts_enabled', String(autoSpeak))
+
+    if (imageAsset) {
+      formData.set('image', imageAsset)
+    }
+
+    if (audioAsset) {
+      formData.set('audio', audioAsset)
+    }
+
+    try {
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        body: formData,
+      })
+      const data = await parseApiPayload(response)
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Generation failed.')
+      }
+
+      if (mode === 'live' && data.tts_audio_error) {
+        setLiveError(data.tts_audio_error)
+      }
+
+      const assistantMessage = {
+        id: crypto.randomUUID(),
+        role: 'assistant',
+        content: data.reply,
+        thought: data.thought,
+        meta: data,
+        createdAt: Date.now(),
+      }
+
+      startTransition(() => {
+        setThreads((current) =>
+          updateThreadInList(current, threadId, (thread) => ({
+            ...thread,
+            updatedAt: Date.now(),
+            messages: [...thread.messages, assistantMessage],
+          })),
+        )
+
+        if (clearComposer) {
+          setPrompt('')
+          setImageFile(null)
+          setAudioFile(null)
+        }
+      })
+
+      if (mode === 'live') {
+        if (autoSpeak && data.tts_audio?.url) {
+          const didSpeak = await playGeneratedAudio(
+            data.tts_audio,
+            playbackAudioRef,
+            () => {
+              setIsSpeaking(true)
+              setLiveStatus('Playing local voice reply...')
+            },
+            () => {
+              setIsSpeaking(false)
+              setLiveStatus('Live session ready.')
+            },
+            () => {
+              setIsSpeaking(false)
+              setLiveStatus('Live reply ready.')
+              setLiveError('Local voice playback failed.')
+            },
+          )
+
+          if (!didSpeak) {
+            setLiveStatus('Live reply ready.')
+          }
+        } else {
+          setLiveStatus('Live reply ready.')
+        }
+      }
+
+      await refreshModelsAndHealth()
+      return assistantMessage
+    } catch (submitError) {
+      setError(submitError.message)
+
+      if (mode === 'live') {
+        setLiveError(submitError.message)
+      }
+
+      startTransition(() => {
+        setThreads((current) =>
+          updateThreadInList(current, threadId, (thread) => ({
+            ...thread,
+            updatedAt: Date.now(),
+            messages: [
+              ...thread.messages,
+              {
+                id: crypto.randomUUID(),
+                role: 'assistant',
+                content: submitError.message,
+                createdAt: Date.now(),
+              },
+            ],
+          })),
+        )
+      })
+
+      return null
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function teardownLiveRecorder() {
+    try {
+      liveAudioProcessorRef.current?.disconnect()
+      liveAudioSourceRef.current?.disconnect()
+      liveAudioSinkRef.current?.disconnect()
+      liveAudioProcessorRef.current = null
+      liveAudioSourceRef.current = null
+      liveAudioSinkRef.current = null
+
+      if (liveAudioContextRef.current) {
+        await liveAudioContextRef.current.close()
+      }
+    } catch {
+      // Best-effort cleanup for browser audio graph.
+    } finally {
+      liveAudioContextRef.current = null
+    }
+  }
+
+  async function startLiveSession() {
+    setLiveError('')
+
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setLiveError('Camera and microphone access requires MediaDevices.getUserMedia().')
+      return false
+    }
+
+    if (liveStreamRef.current) {
+      if (liveVideoRef.current) {
+        liveVideoRef.current.srcObject = liveStreamRef.current
+        await liveVideoRef.current.play().catch(() => {})
+      }
+
+      setIsLiveSessionActive(true)
+      setLiveStatus(
+        supportsNativeLiveAudio
+          ? 'Camera and microphone are live.'
+          : 'Camera is live. Switch to E2B or E4B for microphone input.',
+      )
+      return true
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: 'user',
+        },
+        audio: supportsNativeLiveAudio,
+      })
+
+      liveStreamRef.current = stream
+
+      if (liveVideoRef.current) {
+        liveVideoRef.current.srcObject = stream
+        liveVideoRef.current.muted = true
+        liveVideoRef.current.playsInline = true
+        await liveVideoRef.current.play().catch(() => {})
+      }
+
+      setIsLiveSessionActive(true)
+      setLiveStatus(
+        supportsNativeLiveAudio
+          ? 'Camera and microphone are live.'
+          : 'Camera is live. Switch to E2B or E4B for microphone input.',
+      )
+      return true
+    } catch (sessionError) {
+      setLiveError(
+        sessionError.message || 'Unable to access the local camera or microphone.',
+      )
+      setIsLiveSessionActive(false)
+      return false
+    }
+  }
+
+  async function stopLiveSession() {
+    if (isLiveRecording) {
+      await stopLiveRecording({ submit: false })
+    } else {
+      await teardownLiveRecorder()
+    }
+
+    stopStreamTracks(liveStreamRef.current)
+    liveStreamRef.current = null
+
+    if (liveVideoRef.current) {
+      liveVideoRef.current.pause()
+      liveVideoRef.current.srcObject = null
+    }
+
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {})
+    }
+
+    stopAudioPlayback(playbackAudioRef)
+    liveAudioChunksRef.current = []
+    liveAudioLengthRef.current = 0
+    setIsSpeaking(false)
+    setIsLiveSessionActive(false)
+    setIsLiveRecording(false)
+    setIsLiveSubmitting(false)
+    setLiveStatus('Live mode idle.')
+    setLiveError('')
+  }
+
+  async function handleSendLiveFrame() {
+    const ready = await startLiveSession()
+    if (!ready) {
+      return
+    }
+
+    setLiveStatus('Capturing a live camera frame...')
+
+    try {
+      const imageCapture = await captureVideoFrame(liveVideoRef.current)
+      const assistantMessage = await runTurn({
+        promptText: livePrompt.trim() || 'Describe the current camera frame.',
+        imageAsset: imageCapture,
+        audioAsset: null,
+        visibleText: 'Live camera frame turn.',
+        titleHint: 'Live vision call',
+        mode: 'live',
+      })
+
+      if (!assistantMessage) {
+        setLiveStatus('Live reply ready.')
+      }
+    } catch (captureError) {
+      setLiveError(captureError.message)
+      setLiveStatus('Live session ready.')
+    }
+  }
+
+  async function startLiveRecording() {
+    setLiveError('')
+
+    if (!supportsNativeLiveAudio) {
+      setLiveError(
+        `${selectedModel?.label || 'This model'} does not support native audio input. Switch to Gemma 4 E2B or E4B for voice turns.`,
+      )
+      return
+    }
+
+    if (
+      liveStreamRef.current &&
+      liveStreamRef.current.getAudioTracks().length === 0
+    ) {
+      stopStreamTracks(liveStreamRef.current)
+      liveStreamRef.current = null
+      setIsLiveSessionActive(false)
+    }
+
+    const ready = await startLiveSession()
+    if (!ready) {
+      return
+    }
+
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext
+    if (!AudioContextClass) {
+      setLiveError('This browser does not expose the Web Audio API for live capture.')
+      return
+    }
+
+    stopAudioPlayback(playbackAudioRef)
+    setIsSpeaking(false)
+
+    try {
+      await teardownLiveRecorder()
+      liveAudioChunksRef.current = []
+      liveAudioLengthRef.current = 0
+
+      const audioContext = new AudioContextClass()
+      const sourceNode = audioContext.createMediaStreamSource(liveStreamRef.current)
+      const processorNode = audioContext.createScriptProcessor(4096, 1, 1)
+      const sinkNode = audioContext.createGain()
+      sinkNode.gain.value = 0
+
+      processorNode.onaudioprocess = (event) => {
+        const input = event.inputBuffer.getChannelData(0)
+        liveAudioChunksRef.current.push(new Float32Array(input))
+        liveAudioLengthRef.current += input.length
+      }
+
+      sourceNode.connect(processorNode)
+      processorNode.connect(sinkNode)
+      sinkNode.connect(audioContext.destination)
+
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume()
+      }
+
+      liveAudioContextRef.current = audioContext
+      liveAudioSourceRef.current = sourceNode
+      liveAudioProcessorRef.current = processorNode
+      liveAudioSinkRef.current = sinkNode
+
+      setIsLiveRecording(true)
+      setLiveStatus('Recording live microphone turn...')
+    } catch (recordError) {
+      await teardownLiveRecorder()
+      setLiveError(recordError.message || 'Unable to start live audio capture.')
+    }
+  }
+
+  async function stopLiveRecording({ submit = true } = {}) {
+    const sampleRate = liveAudioContextRef.current?.sampleRate || 16000
+
+    setIsLiveRecording(false)
+    await teardownLiveRecorder()
+
+    if (!submit) {
+      liveAudioChunksRef.current = []
+      liveAudioLengthRef.current = 0
+      setLiveStatus(isLiveSessionActive ? 'Live session ready.' : 'Live mode idle.')
+      return
+    }
+
+    if (liveAudioLengthRef.current === 0) {
+      setLiveError('No microphone audio was captured for this turn.')
+      setLiveStatus('Live session ready.')
+      return
+    }
+
+    setLiveStatus('Preparing live audio turn...')
+
+    let imageCapture = null
+    try {
+      imageCapture = await captureVideoFrame(liveVideoRef.current)
+    } catch (captureError) {
+      setLiveError(captureError.message)
+    }
+
+    const mergedSamples = mergeAudioSamples(
+      liveAudioChunksRef.current,
+      liveAudioLengthRef.current,
+    )
+    const wavBlob = encodeWav(mergedSamples, sampleRate)
+    const audioCapture = new File([wavBlob], `live-turn-${Date.now()}.wav`, {
+      type: 'audio/wav',
+    })
+
+    liveAudioChunksRef.current = []
+    liveAudioLengthRef.current = 0
+    setLiveStatus('Sending live turn to Gemma...')
+
+    const assistantMessage = await runTurn({
+      promptText: livePrompt.trim() || DEFAULT_LIVE_PROMPT,
+      imageAsset: imageCapture,
+      audioAsset: audioCapture,
+      visibleText: 'Live camera and microphone turn.',
+      titleHint: 'Live vision call',
+      mode: 'live',
+    })
+
+    if (!assistantMessage) {
+      setLiveStatus('Live reply ready.')
+    }
+  }
+
+  async function toggleLiveFullscreen() {
+    if (!liveStageRef.current) {
+      return
+    }
+
+    if (document.fullscreenElement) {
+      await document.exitFullscreen().catch(() => {})
+      return
+    }
+
+    if (!liveStageRef.current.requestFullscreen) {
+      setLiveError('Fullscreen mode is unavailable in this browser context.')
+      return
+    }
+
+    await liveStageRef.current.requestFullscreen().catch(() => {
+      setLiveError('Fullscreen mode is unavailable in this browser context.')
+    })
+  }
+
+  async function handleEnterLiveMode() {
+    setViewMode('live')
+    setIsModelMenuOpen(false)
+    setIsQuantizationMenuOpen(false)
+    setIsSettingsOpen(false)
+    setLiveStatus('Starting live mode...')
+    await startLiveSession()
+  }
+
+  async function handleLeaveLiveMode() {
+    await stopLiveSession()
+    setViewMode('text')
+  }
+
+  function handleStopSpeaking() {
+    stopAudioPlayback(playbackAudioRef)
+    setIsSpeaking(false)
+    setLiveStatus('Live session ready.')
+  }
+
+  function handleCreateThread() {
+    const nextThread =
+      threads.length === 0
+        ? createThread('New Chat')
+        : createThread(`New Chat ${threads.length + 1}`)
+
+    setError('')
+
+    startTransition(() => {
+      setThreads((current) => [nextThread, ...current])
+      setActiveThreadId(nextThread.id)
+      setPrompt('')
+      setImageFile(null)
+      setAudioFile(null)
+    })
+  }
+
+  async function handleLoadModel() {
+    if (!selectedModelKey || !selectedQuantizationKey) {
+      return
+    }
+
+    if (!quantizationRuntimeSupported) {
+      setError(
+        selectedQuantization?.doc_summary ||
+          'This quantization is visible for planning only in the current backend.',
+      )
+      return
+    }
+
+    setError('')
+    setIsLoadingModel(true)
+
+    try {
+      const response = await fetch('/api/models/load', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model_key: selectedModelKey,
+          quantization_key: selectedQuantizationKey,
+        }),
+      })
+      const data = await parseApiPayload(response)
+
+      if (!response.ok) {
+        throw new Error(data.detail || 'Unable to load model.')
+      }
+
+      startTransition(() => {
+        setHealth(data.health)
+        setIsModelMenuOpen(false)
+      })
+      await refreshModelsAndHealth()
+    } catch (loadError) {
+      setError(loadError.message)
+    } finally {
+      setIsLoadingModel(false)
+    }
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+
+    const normalizedPrompt = makeFallbackPrompt(prompt, imageFile, audioFile)
+    if (!normalizedPrompt) {
+      setError('Add a prompt, image, or audio before sending.')
+      return
+    }
+
+    await runTurn({
+      promptText: normalizedPrompt,
+      imageAsset: imageFile,
+      audioAsset: audioFile,
+      visibleText: normalizedPrompt,
+      clearComposer: true,
+    })
+  }
+
+  return (
+    <div className="app-shell">
+      <div className="ambient-orb ambient-orb-primary" />
+      <div className="ambient-orb ambient-orb-tertiary" />
+
+      <aside className="history-rail">
+        <div className="history-head">
+          <div>
+            <p className="rail-kicker">History</p>
+            <h2>Recent threads</h2>
+          </div>
+
+          <button className="new-chat-button" type="button" onClick={handleCreateThread}>
+            <span className="material-symbols-outlined">add</span>
+            <span>New Chat</span>
+          </button>
+        </div>
+
+        <nav className="thread-nav" aria-label="Recent conversations">
+          {threads.map((thread) => (
+            <button
+              key={thread.id}
+              className={`thread-entry ${
+                thread.id === activeThreadId ? 'is-active' : ''
+              }`}
+              type="button"
+              onClick={() => setActiveThreadId(thread.id)}
+            >
+              <span className="material-symbols-outlined">chat_bubble_outline</span>
+              <span className="thread-copy">
+                <strong>{thread.title}</strong>
+                <span>{getThreadSubtitle(thread)}</span>
+              </span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="history-footer">
+          <button
+            className="utility-link"
+            type="button"
+            onClick={() => setIsSettingsOpen(true)}
+          >
+            <span className="material-symbols-outlined">tune</span>
+            <span>Settings</span>
+          </button>
+
+          <button className="utility-link" type="button">
+            <span className="material-symbols-outlined">history</span>
+            <span>Archive</span>
+          </button>
+
+          <div className="profile-card">
+            <div className="profile-badge">AA</div>
+            <div>
+              <strong>Local rig</strong>
+              <span>{health?.gpu || 'GPU offline'}</span>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <main className="main-canvas">
+        <header className="topbar">
+          <div className="topbar-brand">
+            <div>
+              <p className="eyebrow">Gemma 4</p>
+              <h1>Intelligent interface</h1>
+            </div>
+
+            <div
+              className={`status-pill ${health?.loaded ? 'is-ready' : 'is-cold'}`}
+            >
+              <span className="status-dot" />
+              <span>{health?.loaded ? 'Warm GPU' : 'Cold start'}</span>
+            </div>
+          </div>
+
+          <div className="topbar-actions">
+            <div className="mode-switch" role="tablist" aria-label="Interface mode">
+              <button
+                className={`mode-switch-button ${
+                  viewMode === 'text' ? 'is-active' : ''
+                }`}
+                type="button"
+                onClick={async () => {
+                  if (viewMode === 'live') {
+                    await handleLeaveLiveMode()
+                    return
+                  }
+
+                  setViewMode('text')
+                }}
+              >
+                <span className="material-symbols-outlined">chat</span>
+                <span>Text studio</span>
+              </button>
+
+              <button
+                className={`mode-switch-button ${
+                  viewMode === 'live' ? 'is-active' : ''
+                }`}
+                type="button"
+                onClick={handleEnterLiveMode}
+              >
+                <span className="material-symbols-outlined">videocam</span>
+                <span>Video call</span>
+              </button>
+            </div>
+
+            <div className="model-picker" ref={modelPickerRef}>
+              <button
+                className="model-trigger"
+                type="button"
+                onClick={() => {
+                  setIsQuantizationMenuOpen(false)
+                  setIsModelMenuOpen((current) => !current)
+                }}
+              >
+                <span className="model-trigger-copy">
+                  <span className="model-trigger-label">Model</span>
+                  <strong>{selectedModel?.label || 'Gemma 4'}</strong>
+                </span>
+                <span className="material-symbols-outlined">expand_more</span>
+              </button>
+
+              {isModelMenuOpen ? (
+                <div className="model-menu">
+                  <div className="model-menu-head">
+                    <div>
+                      <p className="section-label">Variant selector</p>
+                      <h2>Official Gemma 4 lineup</h2>
+                    </div>
+
+                    <button
+                      className="ghost-action"
+                      type="button"
+                      onClick={handleLoadModel}
+                      disabled={
+                        isLoadingModel ||
+                        isSending ||
+                        isLiveSubmitting ||
+                        isLiveRecording ||
+                        !selectedModelKey ||
+                        !selectedQuantizationKey ||
+                        !quantizationRuntimeSupported
+                      }
+                    >
+                      {isLoadingModel ? 'Loading...' : 'Warm selected'}
+                    </button>
+                  </div>
+
+                  <div className="model-menu-list">
+                    {models.map((model) => {
+                      const isSelected = model.key === selectedModelKey
+                      const isLoaded = activeModel?.key === model.key && health?.loaded
+
+                      return (
+                        <button
+                          key={model.key}
+                          className={`model-menu-item ${
+                            isSelected ? 'is-selected' : ''
+                          } ${isLoaded ? 'is-loaded' : ''}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedModelKey(model.key)
+                            setIsModelMenuOpen(false)
+                          }}
+                        >
+                          <div className="model-menu-row">
+                            <strong>{model.label}</strong>
+                            <span>{isLoaded ? 'Loaded' : model.tier}</span>
+                          </div>
+                          <p>{model.doc_summary}</p>
+                          <div className="message-chip-row">
+                            <span className="message-chip">{model.architecture}</span>
+                            <span className="message-chip">{model.context_length}</span>
+                            {model.supported_modalities.map((modality) => (
+                              <span
+                                key={`${model.key}-${modality}`}
+                                className="message-chip is-modality"
+                              >
+                                {modality}
+                              </span>
+                            ))}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="model-picker" ref={quantizationPickerRef}>
+              <button
+                className="model-trigger"
+                type="button"
+                onClick={() => {
+                  setIsModelMenuOpen(false)
+                  setIsQuantizationMenuOpen((current) => !current)
+                }}
+              >
+                <span className="model-trigger-copy">
+                  <span className="model-trigger-label">Quantization</span>
+                  <strong>{selectedQuantization?.label || 'BF16'}</strong>
+                </span>
+                <span className="material-symbols-outlined">expand_more</span>
+              </button>
+
+              {isQuantizationMenuOpen ? (
+                <div className="model-menu quantization-menu">
+                  <div className="model-menu-head">
+                    <div>
+                      <p className="section-label">Precision selector</p>
+                      <h2>Gemma 4 quantization</h2>
+                    </div>
+
+                    <button
+                      className="ghost-action"
+                      type="button"
+                      onClick={handleLoadModel}
+                      disabled={
+                        isLoadingModel ||
+                        isSending ||
+                        isLiveSubmitting ||
+                        isLiveRecording ||
+                        !selectedModelKey ||
+                        !selectedQuantizationKey ||
+                        !quantizationRuntimeSupported
+                      }
+                    >
+                      {isLoadingModel ? 'Loading...' : 'Load selection'}
+                    </button>
+                  </div>
+
+                  <div className="model-menu-list">
+                    {quantizations.map((quantization) => {
+                      const isSelected =
+                        quantization.key === selectedQuantizationKey
+                      const isLoaded =
+                        health?.loaded &&
+                        activeModel?.key === selectedModelKey &&
+                        activeQuantization?.key === quantization.key
+                      const memoryEstimate = getModelMemoryEstimate(
+                        selectedModel,
+                        quantization.key,
+                      )
+
+                      return (
+                        <button
+                          key={quantization.key}
+                          className={`model-menu-item ${
+                            isSelected ? 'is-selected' : ''
+                          } ${isLoaded ? 'is-loaded' : ''}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedQuantizationKey(quantization.key)
+                            setIsQuantizationMenuOpen(false)
+                          }}
+                        >
+                          <div className="model-menu-row">
+                            <strong>{quantization.label}</strong>
+                            <span>{isLoaded ? 'Loaded' : getQuantizationRuntimeLabel(quantization)}</span>
+                          </div>
+                          <p>{quantization.doc_summary}</p>
+                          <div className="message-chip-row">
+                            <span className="message-chip">
+                              {quantization.precision_bits}-bit
+                            </span>
+                            {memoryEstimate ? (
+                              <span className="message-chip">
+                                Google est. {formatMemory(memoryEstimate)}
+                              </span>
+                            ) : null}
+                            <span
+                              className={`message-chip ${
+                                quantization.runtime_supported ? 'is-modality' : ''
+                              }`}
+                            >
+                              {getQuantizationRuntimeLabel(quantization)}
+                            </span>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+
+            <button
+              className="topbar-icon"
+              type="button"
+              onClick={() => audioInputRef.current?.click()}
+              disabled={
+                !supportsAudio ||
+                !quantizationRuntimeSupported ||
+                isSending ||
+                isLoadingModel ||
+                viewMode === 'live'
+              }
+              title={
+                !quantizationRuntimeSupported
+                  ? 'This quantization is planning only in the current backend'
+                  : supportsAudio
+                  ? 'Attach audio'
+                  : 'Audio is only available on E2B and E4B'
+              }
+            >
+              <span className="material-symbols-outlined">mic</span>
+            </button>
+
+            <button
+              className="topbar-icon"
+              type="button"
+              onClick={() => setIsSettingsOpen(true)}
+            >
+              <span className="material-symbols-outlined">settings</span>
+            </button>
+          </div>
+        </header>
+
+        {viewMode === 'text' ? (
+          <>
+        <section className="conversation-stage">
+          {isSending || isLoadingModel ? <div className="stage-shimmer" /> : null}
+
+          <div className="conversation-scroll" ref={logRef}>
+            <div className="mobile-rail">
+              <button className="new-chat-button" type="button" onClick={handleCreateThread}>
+                <span className="material-symbols-outlined">add</span>
+                <span>New Chat</span>
+              </button>
+
+              <div className="mobile-thread-strip">
+                {threads.map((thread) => (
+                  <button
+                    key={`mobile-${thread.id}`}
+                    className={`mobile-thread-chip ${
+                      thread.id === activeThreadId ? 'is-active' : ''
+                    }`}
+                    type="button"
+                    onClick={() => setActiveThreadId(thread.id)}
+                  >
+                    {thread.title}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <section className="editorial-hero">
+              <div className="hero-copy">
+                <p className="eyebrow">The Ethereal Intelligence</p>
+                <h2>
+                  {greeting}, <span className="gradient-text">Gemma 4.</span>
+                </h2>
+                <p>
+                  Prompt text, image, and audio from a single local canvas.
+                  {supportsAudio
+                    ? ` ${selectedModel?.label || 'This variant'} is currently unlocked for text, image, and audio.`
+                    : ` ${selectedModel?.label || 'This variant'} is currently scoped to text and image according to the official modality tables.`}
+                </p>
+
+                <div className="prompt-pill-row">
+                  {PROMPT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.title}
+                      className="prompt-pill"
+                      type="button"
+                      onClick={() => setPrompt(preset.prompt)}
+                    >
+                      <span className="material-symbols-outlined">{preset.icon}</span>
+                      <span>{preset.title}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <aside className="hero-panel">
+                <div className="hero-panel-head">
+                  <div>
+                    <p className="section-label">Selected variant</p>
+                    <h3>{selectedModel?.label || 'Gemma 4'}</h3>
+                  </div>
+
+                  <button
+                    className="ghost-action"
+                    type="button"
+                    onClick={handleLoadModel}
+                    disabled={
+                      isLoadingModel ||
+                      isSending ||
+                      isLiveSubmitting ||
+                      isLiveRecording ||
+                      !selectedModelKey ||
+                      !selectedQuantizationKey ||
+                      !quantizationRuntimeSupported
+                    }
+                  >
+                    {isLoadingModel ? 'Loading...' : 'Load model'}
+                  </button>
+                </div>
+
+                {selectedModel ? (
+                  <>
+                    <div className="message-chip-row">
+                      <span className="message-chip">{selectedModel.architecture}</span>
+                      <span className="message-chip">{selectedModel.tier}</span>
+                      <span className="message-chip">{selectedModel.context_length}</span>
+                      {selectedQuantization ? (
+                        <span className="message-chip">
+                          {selectedQuantization.label}
+                        </span>
+                      ) : null}
+                      {modalityBadges.map((modality) => (
+                        <span key={modality} className="message-chip is-modality">
+                          {modality}
+                        </span>
+                      ))}
+                    </div>
+
+                    <p className="hero-note">{selectedModel.parameter_summary}</p>
+                    <p className="hero-note">{selectedModel.doc_summary}</p>
+                    {selectedQuantization ? (
+                      <p className="hero-note">
+                        {selectedQuantization.doc_summary}
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
+
+                <div className="hero-stat-grid">
+                  <div className="hero-stat">
+                    <span>VRAM now</span>
+                    <strong>{formatMemory(health?.vram_allocated_gib)}</strong>
+                  </div>
+                  <div className="hero-stat">
+                    <span>Active model</span>
+                    <strong>{activeModel?.label || 'None loaded'}</strong>
+                  </div>
+                  <div className="hero-stat">
+                    <span>Quantization</span>
+                    <strong>{selectedQuantization?.label || 'BF16'}</strong>
+                  </div>
+                  <div className="hero-stat">
+                    <span>Google est.</span>
+                    <strong>{formatMemory(selectedMemoryEstimate)}</strong>
+                  </div>
+                </div>
+
+                <p className="hero-footnote">
+                  {modelSwitchPending
+                    ? `VRAM currently holds ${activeModel.label} in ${activeQuantization?.label || 'BF16'}. Load ${selectedModel?.label} / ${selectedQuantization?.label || 'BF16'} when you want to switch.`
+                    : quantizationRuntimeSupported
+                      ? `Google estimates about ${formatMemory(selectedMemoryEstimate)} for ${selectedModel?.label || 'this model'} in ${selectedQuantization?.label || 'BF16'}. ${docsNote}`
+                      : `${quantizationNote} ${selectedQuantization?.doc_summary || ''}`}
+                </p>
+              </aside>
+            </section>
+
+            <section className="conversation-thread">
+              {messages.length === 0 ? (
+                <div className="empty-thread">
+                  <p className="empty-kicker">Ready for local inference</p>
+                  <h3>{activeThread?.title || 'New Chat'}</h3>
+                  <p>
+                    Switch between the official Gemma 4 variants, keep one model
+                    warm in VRAM, and send multimodal prompts without leaving the
+                    canvas.
+                  </p>
+
+                  <div className="empty-grid">
+                    {PROMPT_PRESETS.map((preset) => (
+                      <button
+                        key={`empty-${preset.title}`}
+                        className="empty-card"
+                        type="button"
+                        onClick={() => setPrompt(preset.prompt)}
+                      >
+                        <span className="material-symbols-outlined">{preset.icon}</span>
+                        <strong>{preset.title}</strong>
+                        <p>{preset.prompt}</p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div className="message-flow">
+                  {messages.map((message) => (
+                    <article
+                      key={message.id}
+                      className={`thread-message thread-message-${message.role}`}
+                    >
+                      {message.role === 'assistant' ? (
+                        <div className="message-brand">
+                          <div className="message-brand-icon">
+                            <span className="material-symbols-outlined">auto_awesome</span>
+                          </div>
+                          <span>Gemma 4 analysis</span>
+                        </div>
+                      ) : null}
+
+                      <div
+                        className={`message-shell ${
+                          message.role === 'user' ? 'user-bubble' : 'assistant-panel'
+                        }`}
+                      >
+                        <div className="message-header">
+                          <span className="message-role">
+                            {message.role === 'user' ? 'You' : 'Gemma 4'}
+                          </span>
+                          <span className="message-time">
+                            {formatMessageTime(message.createdAt)}
+                          </span>
+                        </div>
+
+                        {message.attachmentLabels?.length ? (
+                          <div className="message-chip-row">
+                            {message.attachmentLabels.map((label) => (
+                              <span key={`${message.id}-${label}`} className="message-chip">
+                                {label}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        <div className="message-copy">
+                          <p>{message.content}</p>
+                        </div>
+
+                        {message.thought ? (
+                          <details className="thought-card">
+                            <summary>Thinking trace</summary>
+                            <p>{message.thought}</p>
+                          </details>
+                        ) : null}
+
+                        {message.meta?.tts_audio?.url ? (
+                          <div className="assistant-audio-card">
+                            <div className="assistant-audio-meta">
+                              <span className="material-symbols-outlined">graphic_eq</span>
+                              <span>
+                                Local voice | {message.meta.tts_audio.voice || 'Piper'}
+                              </span>
+                            </div>
+                            <audio
+                              className="assistant-audio-player"
+                              controls
+                              preload="none"
+                              src={message.meta.tts_audio.url}
+                            />
+                          </div>
+                        ) : null}
+
+                        {message.meta ? (
+                          <div className="message-chip-row">
+                            {getAssistantChips(message).map((chip) => (
+                              <span key={`${message.id}-${chip}`} className="message-chip">
+                                {chip}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+
+              {isSending ? (
+                <article className="thread-message thread-message-assistant">
+                  <div className="message-brand">
+                    <div className="message-brand-icon">
+                      <span className="material-symbols-outlined">auto_awesome</span>
+                    </div>
+                    <span>Gemma 4 analysis</span>
+                  </div>
+
+                  <div className="message-shell assistant-panel is-loading">
+                    <div className="message-header">
+                      <span className="message-role">Gemma 4</span>
+                      <span className="message-time">Running</span>
+                    </div>
+                    <div className="message-copy">
+                      <p>The local model is processing the current request.</p>
+                    </div>
+                  </div>
+                </article>
+              ) : null}
+            </section>
+          </div>
+        </section>
+
+        <footer className="command-footer">
+          <form className="command-inner" onSubmit={handleSubmit}>
+            {imagePreview || audioPreview ? (
+              <div className="composer-previews">
+                {imagePreview ? (
+                  <div className="media-preview">
+                    <div className="preview-meta">
+                      <div>
+                        <strong>{imageFile?.name || 'Image'}</strong>
+                        <span>Image input queued</span>
+                      </div>
+                      <button
+                        className="preview-remove"
+                        type="button"
+                        onClick={() => setImageFile(null)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <img src={imagePreview} alt="Selected image preview" />
+                  </div>
+                ) : null}
+
+                {audioPreview ? (
+                  <div className="media-preview">
+                    <div className="preview-meta">
+                      <div>
+                        <strong>{audioFile?.name || 'Audio'}</strong>
+                        <span>Audio input queued</span>
+                      </div>
+                      <button
+                        className="preview-remove"
+                        type="button"
+                        onClick={() => setAudioFile(null)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                    <audio controls src={audioPreview} />
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="glass-dock">
+              <div className="dock-leading">
+                <button
+                  className="dock-button"
+                  type="button"
+                  onClick={() => imageInputRef.current?.click()}
+                  disabled={!supportsImage || isSending || isLoadingModel}
+                >
+                  <span className="material-symbols-outlined">image</span>
+                </button>
+
+                <button
+                  className="dock-button"
+                  type="button"
+                  onClick={() => audioInputRef.current?.click()}
+                  disabled={!supportsAudio || isSending || isLoadingModel}
+                  title={
+                    supportsAudio
+                      ? 'Attach audio'
+                      : 'Audio is only available on E2B and E4B'
+                  }
+                >
+                  <span className="material-symbols-outlined">mic</span>
+                </button>
+              </div>
+
+              <label className="composer-field">
+                <textarea
+                  className="composer-textarea"
+                  value={prompt}
+                  onChange={(event) => setPrompt(event.target.value)}
+                  placeholder="Message Gemma 4..."
+                  rows={1}
+                />
+              </label>
+
+              <div className="dock-actions">
+                <button
+                  className={`dock-toggle ${settings.thinking ? 'is-active' : ''}`}
+                  type="button"
+                  onClick={() =>
+                    setSettings((current) => ({
+                      ...current,
+                      thinking: !current.thinking,
+                    }))
+                  }
+                >
+                  Thinking
+                </button>
+
+                <button
+                  className={`dock-toggle ${autoSpeak ? 'is-active' : ''}`}
+                  type="button"
+                  onClick={() => setAutoSpeak((current) => !current)}
+                >
+                  {autoSpeak ? 'Local voice on' : 'Local voice off'}
+                </button>
+
+                <button
+                  className="send-button"
+                  type="submit"
+                  disabled={
+                    isSending || isLoadingModel || !quantizationRuntimeSupported
+                  }
+                >
+                  <span className="material-symbols-outlined">arrow_upward</span>
+                </button>
+              </div>
+            </div>
+
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/*"
+              hidden
+              onChange={(event) => setImageFile(event.target.files?.[0] ?? null)}
+            />
+            <input
+              ref={audioInputRef}
+              type="file"
+              accept="audio/*,.wav,.mp3,.m4a,.flac"
+              hidden
+              onChange={(event) => setAudioFile(event.target.files?.[0] ?? null)}
+            />
+
+            <div className="dock-meta">
+              <span>
+                {selectedModel?.label || 'Gemma 4'} |{' '}
+                {selectedQuantization?.label || 'BF16'} |{' '}
+                {modalityBadges.length > 0 ? modalityBadges.join(' + ') : 'text'} |{' '}
+                {activeThreadSubtitle}
+              </span>
+              {error ? (
+                <strong>{error}</strong>
+              ) : (
+                <span>Gemma 4 can make mistakes. Check important info.</span>
+              )}
+            </div>
+          </form>
+        </footer>
+          </>
+        ) : (
+          <section className="live-stage" ref={liveStageRef}>
+            {isLiveSubmitting || isLiveRecording || isLoadingModel ? (
+              <div className="stage-shimmer live-stage-shimmer" />
+            ) : null}
+
+            <div className="live-stage-inner">
+              <div className="live-video-panel">
+                <video
+                  ref={liveVideoRef}
+                  className="live-video"
+                  autoPlay
+                  muted
+                  playsInline
+                />
+
+                {!isLiveSessionActive ? (
+                  <div className="live-video-overlay">
+                    <p className="eyebrow">Live vision call</p>
+                    <h2>Camera, microphone, and Gemma on one stage.</h2>
+                    <p>
+                      Start a local live session, speak into the microphone, and
+                      send the current camera frame with every turn.
+                    </p>
+                    <div className="live-overlay-actions">
+                      <button
+                        className="new-chat-button"
+                        type="button"
+                        onClick={startLiveSession}
+                      >
+                        <span className="material-symbols-outlined">videocam</span>
+                        <span>Start camera</span>
+                      </button>
+                      <button
+                        className="ghost-action"
+                        type="button"
+                        onClick={handleLeaveLiveMode}
+                      >
+                        Back to text
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+
+                <div className="live-video-hud">
+                  <div className="live-pill">
+                    <span className="material-symbols-outlined">radio_button_checked</span>
+                    <span>{isLiveRecording ? 'Recording' : 'Live'}</span>
+                  </div>
+                  <div className="live-pill">
+                    <span className="material-symbols-outlined">memory</span>
+                    <span>
+                      {selectedModel?.label || 'Gemma 4'} /{' '}
+                      {selectedQuantization?.label || 'BF16'}
+                    </span>
+                  </div>
+                  <div className="live-pill">
+                    <span className="material-symbols-outlined">graphic_eq</span>
+                    <span>{supportsNativeLiveAudio ? 'Voice in enabled' : 'Voice in disabled'}</span>
+                  </div>
+                </div>
+              </div>
+
+              <aside className="live-control-panel">
+                <div className="live-panel-head">
+                  <div>
+                    <p className="section-label">Call mode</p>
+                    <h2>Realtime camera loop</h2>
+                  </div>
+
+                  <button
+                    className="topbar-icon"
+                    type="button"
+                    onClick={toggleLiveFullscreen}
+                  >
+                    <span className="material-symbols-outlined">
+                      {isLiveFullscreen ? 'fullscreen_exit' : 'fullscreen'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="live-chip-row">
+                  <span className="message-chip">
+                    {quantizationRuntimeSupported
+                      ? supportsNativeLiveAudio
+                        ? 'Audio input to Gemma'
+                        : 'Vision only on this model'
+                      : 'Quantization not runnable here'}
+                  </span>
+                  <span className="message-chip">
+                    {autoSpeak ? 'Local TTS on' : 'Local TTS off'}
+                  </span>
+                  <span className="message-chip">
+                    {isSpeaking ? 'Speaking reply' : liveStatus}
+                  </span>
+                </div>
+
+                <label className="field live-prompt-field">
+                  <span>Live instruction</span>
+                  <textarea
+                    value={livePrompt}
+                    onChange={(event) => setLivePrompt(event.target.value)}
+                    rows={4}
+                  />
+                </label>
+
+                <div className="live-control-grid">
+                  <button
+                    className={`live-control-button ${
+                      isLiveSessionActive ? 'is-active' : ''
+                    }`}
+                    type="button"
+                    onClick={isLiveSessionActive ? stopLiveSession : startLiveSession}
+                  >
+                    <span className="material-symbols-outlined">
+                      {isLiveSessionActive ? 'videocam_off' : 'videocam'}
+                    </span>
+                    <span>{isLiveSessionActive ? 'Stop camera' : 'Start camera'}</span>
+                  </button>
+
+                  <button
+                    className={`live-control-button ${
+                      isLiveRecording ? 'is-recording' : ''
+                    }`}
+                    type="button"
+                    onClick={
+                      isLiveRecording
+                        ? () => stopLiveRecording({ submit: true })
+                        : startLiveRecording
+                    }
+                    disabled={
+                      isLiveSubmitting ||
+                      isLoadingModel ||
+                      !supportsNativeLiveAudio
+                    }
+                  >
+                    <span className="material-symbols-outlined">
+                      {isLiveRecording ? 'stop_circle' : 'mic'}
+                    </span>
+                    <span>{isLiveRecording ? 'Send voice turn' : 'Record voice turn'}</span>
+                  </button>
+
+                  <button
+                    className="live-control-button"
+                    type="button"
+                    onClick={handleSendLiveFrame}
+                    disabled={
+                      isLiveSubmitting ||
+                      isLoadingModel ||
+                      !quantizationRuntimeSupported
+                    }
+                  >
+                    <span className="material-symbols-outlined">photo_camera</span>
+                    <span>Send camera frame</span>
+                  </button>
+
+                  <button
+                    className={`live-control-button ${autoSpeak ? 'is-active' : ''}`}
+                    type="button"
+                    onClick={() => setAutoSpeak((current) => !current)}
+                  >
+                    <span className="material-symbols-outlined">
+                      {autoSpeak ? 'volume_up' : 'volume_off'}
+                    </span>
+                    <span>{autoSpeak ? 'Local voice on' : 'Local voice off'}</span>
+                  </button>
+                </div>
+
+                {isSpeaking ? (
+                  <button
+                    className="live-secondary-button"
+                    type="button"
+                    onClick={handleStopSpeaking}
+                  >
+                    Stop voice output
+                  </button>
+                ) : null}
+
+                <div className="live-note-stack">
+                  <p className="hero-note">
+                    Gemma 4 E2B and E4B accept audio input. The response voice is
+                    now generated server-side with Piper and played back as a local
+                    WAV clip because the current Gemma checkpoints still return
+                    text, not native audio.
+                  </p>
+                  {liveError ? <p className="live-error">{liveError}</p> : null}
+                </div>
+
+                <div className="live-transcript-panel">
+                  <div className="live-panel-head">
+                    <div>
+                      <p className="section-label">Recent turns</p>
+                      <h3>{activeThread?.title || 'Live vision call'}</h3>
+                    </div>
+                    <span className="message-chip">
+                      {isLiveSubmitting ? 'Gemma running' : 'Ready'}
+                    </span>
+                  </div>
+
+                  {latestTurns.length > 0 ? (
+                    <div className="live-turn-list">
+                      {latestTurns.map((message) => (
+                        <article
+                          key={`live-${message.id}`}
+                          className={`live-turn live-turn-${message.role}`}
+                        >
+                          <strong>{message.role === 'user' ? 'You' : 'Gemma 4'}</strong>
+                          <p>{message.content}</p>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-copy">
+                      Start a live turn to see the rolling camera conversation here.
+                    </p>
+                  )}
+                </div>
+              </aside>
+            </div>
+          </section>
+        )}
+      </main>
+
+      {isSettingsOpen ? (
+        <>
+          <button
+            className="settings-scrim"
+            type="button"
+            aria-label="Close settings"
+            onClick={() => setIsSettingsOpen(false)}
+          />
+
+          <aside className="settings-panel">
+            <div className="settings-header">
+              <div>
+                <p className="section-label">Command center</p>
+                <h2>Run settings</h2>
+              </div>
+
+              <button
+                className="topbar-icon"
+                type="button"
+                onClick={() => setIsSettingsOpen(false)}
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            <section className="settings-section">
+              <div className="settings-section-head">
+                <h3>Sampling</h3>
+                <p>These controls are forwarded directly to the local backend.</p>
+              </div>
+
+              <div className="field-grid">
+                <label className="field">
+                  <span>Max new tokens</span>
+                  <input
+                    type="number"
+                    min="32"
+                    max="1024"
+                    value={settings.maxNewTokens}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        maxNewTokens: Number(event.target.value || 256),
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Temperature</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.05"
+                    value={settings.temperature}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        temperature: Number(event.target.value || 1),
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Top p</span>
+                  <input
+                    type="number"
+                    min="0.1"
+                    max="1"
+                    step="0.01"
+                    value={settings.topP}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        topP: Number(event.target.value || 0.95),
+                      }))
+                    }
+                  />
+                </label>
+
+                <label className="field">
+                  <span>Top k</span>
+                  <input
+                    type="number"
+                    min="1"
+                    max="128"
+                    value={settings.topK}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        topK: Number(event.target.value || 64),
+                      }))
+                    }
+                  />
+                </label>
+              </div>
+
+              <label className="toggle-field">
+                <span>Thinking mode</span>
+                <input
+                  type="checkbox"
+                  checked={settings.thinking}
+                  onChange={(event) =>
+                    setSettings((current) => ({
+                      ...current,
+                      thinking: event.target.checked,
+                    }))
+                  }
+                />
+              </label>
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-section-head">
+                <h3>System prompt</h3>
+                <p>Applied to every new request on the active thread.</p>
+              </div>
+
+              <label className="field">
+                <span>Instruction layer</span>
+                <textarea
+                  value={systemPrompt}
+                  onChange={(event) => setSystemPrompt(event.target.value)}
+                  rows={7}
+                />
+              </label>
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-section-head">
+                <h3>Machine state</h3>
+                <p>Live telemetry from the local Gemma backend.</p>
+              </div>
+
+              <div className="metric-grid">
+                <div className="metric-card">
+                  <span>Status</span>
+                  <strong>{health?.loaded ? 'Model loaded' : 'Cold start'}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>VRAM now</span>
+                  <strong>{formatMemory(health?.vram_allocated_gib)}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Active model</span>
+                  <strong>{activeModel?.label || 'Gemma 4'}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Active quantization</span>
+                  <strong>{activeQuantization?.label || 'BF16'}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>GPU total</span>
+                  <strong>{formatMemory(health?.gpu_total_memory_gib)}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Google estimate</span>
+                  <strong>{formatMemory(activeMemoryEstimate)}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Cache</span>
+                  <strong>{health?.cache_dir || '.hf-cache'}</strong>
+                </div>
+                <div className="metric-card">
+                  <span>Quant note</span>
+                  <strong>{getQuantizationRuntimeLabel(selectedQuantization)}</strong>
+                </div>
+              </div>
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-section-head">
+                <h3>Last answer</h3>
+                <p>Telemetry for the latest assistant message in this thread.</p>
+              </div>
+
+              {latestAssistantMessage ? (
+                <div className="metric-grid">
+                  <div className="metric-card">
+                    <span>Model</span>
+                    <strong>
+                      {latestAssistantMessage.meta.active_model?.label ||
+                        latestAssistantMessage.meta.active_model_key}
+                    </strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Quantization</span>
+                    <strong>
+                      {latestAssistantMessage.meta.active_quantization?.label ||
+                        latestAssistantMessage.meta.active_quantization_key ||
+                        'BF16'}
+                    </strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Latency</span>
+                    <strong>{formatElapsed(latestAssistantMessage.meta.elapsed_ms)}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>New tokens</span>
+                    <strong>{latestAssistantMessage.meta.generated_tokens}</strong>
+                  </div>
+                  <div className="metric-card">
+                    <span>Reserved VRAM</span>
+                    <strong>
+                      {formatMemory(latestAssistantMessage.meta.vram_reserved_gib)}
+                    </strong>
+                  </div>
+                </div>
+              ) : (
+                <p className="muted-copy">
+                  No answer yet on this thread. Run a prompt to inspect the local
+                  telemetry.
+                </p>
+              )}
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-section-head">
+                <h3>Source note</h3>
+                <p>Modalities follow the official Gemma 4 tables.</p>
+              </div>
+              <p className="muted-copy">{docsNote}</p>
+            </section>
+          </aside>
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+export default App

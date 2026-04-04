@@ -1,0 +1,42 @@
+{
+  "timestamp_utc": "2026-04-04T17:40:18.051107+00:00",
+  "hardware": {
+    "name": "NVIDIA GeForce RTX 5090",
+    "driver_version": "581.42",
+    "memory_total_mib": 32607
+  },
+  "config": {
+    "max_new_tokens": 64,
+    "warmup_tokens": 16,
+    "runs": 1,
+    "local_only": true,
+    "cache_dir": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\.hf-cache",
+    "prompt": "Explain in a compact technical paragraph why local multimodal inference throughput matters for a desktop copilot."
+  },
+  "results": [
+    {
+      "model_key": "26b-a4b",
+      "label": "Gemma 4 26B A4B",
+      "hf_model_id": "google/gemma-4-26B-A4B-it",
+      "architecture": "MoE",
+      "tier": "Workstation",
+      "quantization": "bf16",
+      "official_bf16_memory_gib": 48.0,
+      "gpu_total_memory_gib": 31.84,
+      "windows_commit_before": {
+        "total_physical_gib": 63.61,
+        "available_physical_gib": 26.98,
+        "commit_limit_gib": 115.61,
+        "available_commit_gib": 36.15
+      },
+      "status": "failed",
+      "error": "OSError: Le fichier de pagination est insuffisant pour terminer cette op\u00e9ration. (os error 1455)",
+      "windows_commit_after": {
+        "total_physical_gib": 63.61,
+        "available_physical_gib": 29.08,
+        "commit_limit_gib": 151.05,
+        "available_commit_gib": 46.6
+      }
+    }
+  ]
+}

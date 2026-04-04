@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulateur de Fusée</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #87CEEB; /* Ciel de jour par défaut */
+        }
+        
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        #ui-container {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            text-shadow: 1px 1px 3px rgba(0,0,0,0.8);
+            z-index: 10;
+        }
+
+        #stats {
+            background: rgba(0, 0, 0, 0.5);
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stat-line {
+            font-size: 24px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+        }
+
+        button {
+            background: #ff4757;
+            color: white;
+            border: none;
+            padding: 15px 40px;
+            font-size: 24px;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(255, 71, 87, 0.5);
+            transition: all 0.2s;
+            text-transform: uppercase;
+        }
+
+        button:hover {
+            background: #ff6b81;
+            transform: scale(1.05);
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        button:disabled {
+            background: #747d8c;
+            cursor: not-allowed;
+            box-shadow: none;
+            transform: scale(1);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-container">
+        <div id="stats">
+            <div class="stat-line" id="alt-display">Altitude: 0 m</div>
+            <div class="stat-line" id="spd-display">Vitesse: 0 km/h</div>
+        </div>
+    </div>
+
+    <div id="controls">
+        <button id="launchBtn">Lancer la fusée 🚀</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const launchBtn = document.getElementById('launchBtn');
+        const altDisplay = document.getElementById('alt-display');
+        const spdDisplay = document.getElementById('spd-display');
+
+        // Redimensionner le canvas
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Variables physiques
+        let isLaunched = false;
+        let altitude = 0;
+        let velocity = 0;
+        const gravity = 0.05;
+        const thrust = 0.2; // Accélération
+        const maxAtmosphere = 20000; // Altitude où l'espace devient totalement noir
+
+        // Etoiles
+        const stars = [];
+        for (let i = 0; i < 200; i++) {
+            stars.push({
+                x: Math.random() * window.innerWidth,
+                y: Math.random() * window.innerHeight,
+                size: Math.random() * 2,
+                opacity: Math.random()
+            });
+        }
+
+        // Particules de réacteur
+        let particles = [];
+        class Particle {
+            constructor(x, y) {
+                this.x = x + (Math.random() * 20 - 10);
+                this.y = y;
+                this.vx = (Math.random() * 2 - 1);
+                this.vy = (Math.random() * 5 + 5);
+                this.life = 1.0;
+                this.decay = Math.random() * 0.02 + 0.02;
+                this.color = Math.random() > 0.5 ? '#ff4757' : '#ffa502'; // Rouge ou Orange
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+            }
+            draw() {
+                ctx.globalAlpha = this.life;
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.life * 10, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        // Action de lancement
+        launchBtn.addEventListener('click', () => {
+            isLaunched = true;
+            launchBtn.disabled = true;
+            launchBtn.innerText = "En vol !";
+        });
+
+        // Calculer la couleur du ciel en fonction de l'altitude
+        function getSkyColor(alt) {
+            // RGB Ciel dégagé: 135, 206, 235
+            // RGB Espace: 10, 10, 20
+            
+            let progress = Math.min(alt / maxAtmosphere, 1.0);
+            
+            let r = Math.floor(135 - (135 - 10) * progress);
+            let g = Math.floor(206 - (206 - 10) * progress);
+            let b = Math.floor(235 - (235 - 20) * progress);
+            
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+        function drawRocket(x, y) {
+            ctx.save();
+            ctx.translate(x, y);
+            
+            // Emoji comme fusée (simple et joli)
+            ctx.font = '80px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            // Rotation pour la pointer vers le haut
+            ctx.rotate(-Math.PI / 4); 
+            ctx.fillText('🚀', 0, 0);
+            
+            ctx.restore();
+        }
+
+        function update() {
+            if (isLaunched) {
+                // Application spatiale de Newton (vitesse et altitude)
+                velocity += (thrust - gravity);
+                altitude += velocity;
+                
+                // Génération de particules
+                particles.push(new Particle(canvas.width / 2, canvas.height / 2 + 40));
+            }
+
+            // Mise à jour de l'UI
+            altDisplay.innerText = `Altitude: ${Math.floor(altitude)} m`;
+            spdDisplay.innerText = `Vitesse: ${Math.floor(velocity * 36)} km/h`; // *36 pour conversion bidon m/s -> km/h esthétique
+
+            // Mise à jour des particules
+            for (let i = particles.length - 1; i >= 0; i--) {
+                particles[i].update();
+                if (particles[i].life <= 0) {
+                    particles.splice(i, 1);
+                }
+            }
+        }
+
+        function draw() {
+            // Fond (Ciel / Espace)
+            ctx.fillStyle = getSkyColor(altitude);
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Dessiner les étoiles si on est assez haut
+            if (altitude > 5000) {
+                let starVisibility = Math.min((altitude - 5000) / 10000, 1.0);
+                ctx.fillStyle = `rgba(255, 255, 255, ${starVisibility})`;
+                
+                stars.forEach(star => {
+                    ctx.globalAlpha = star.opacity * starVisibility;
+                    ctx.beginPath();
+                    ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                    ctx.fill();
+                    
+                    // Faire défiler les étoiles vers le bas en fonction de la vitesse
+                    if (isLaunched) {
+                        star.y += velocity * 0.1;
+                        if (star.y > canvas.height) {
+                            star.y = 0;
+                            star.x = Math.random() * canvas.width;
+                        }
+                    }
+                });
+                ctx.globalAlpha = 1.0;
+            }
+
+            // Dessiner le sol si on est près de la Terre
+            if (altitude < canvas.height) {
+                ctx.fillStyle = '#2ecc71'; // Vert
+                // Le sol descend au fur et à mesure que l'altitude monte
+                let groundY = (canvas.height / 2 + 100) + altitude;
+                ctx.fillRect(0, groundY, canvas.width, canvas.height);
+                
+                // Plateforme de lancement
+                ctx.fillStyle = '#7f8c8d';
+                ctx.fillRect(canvas.width / 2 - 60, groundY - 20, 120, 20);
+            }
+
+            // Dessiner la fusée (elle reste fixe au centre, c'est l'univers qui bouge autour !)
+            let rocketY = canvas.height / 2;
+            if (!isLaunched && altitude === 0) {
+                // Posée sur le sol
+                rocketY = canvas.height / 2 + 50; 
+            }
+            
+            // Dessiner les flammes
+            particles.forEach(p => p.draw());
+
+            // Dessiner le vaisseau
+            drawRocket(canvas.width / 2, rocketY);
+        }
+
+        // Boucle principale
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        // Démarrer la boucle
+        loop();
+    </script>
+</body>
+</html>

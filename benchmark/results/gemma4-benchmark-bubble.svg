@@ -1,0 +1,144 @@
+<svg viewBox="0 0 1400 860" width="1400" height="860" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#08101f"/>
+      <stop offset="100%" stop-color="#101a30"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f1930"/>
+      <stop offset="100%" stop-color="#15233f"/>
+    </linearGradient>
+  </defs>
+
+  <style>
+    .title { fill: #dee5ff; font: 800 32px Manrope, Inter, Arial, sans-serif; }
+    .subtitle { fill: #9aa7c7; font: 500 16px Inter, Arial, sans-serif; }
+    .axis { stroke: #8ca3d8; stroke-width: 2; }
+    .grid { stroke: #2b3550; stroke-width: 1; opacity: 0.85; }
+    .label { fill: #f2f6ff; font: 600 14px Inter, Arial, sans-serif; }
+    .tick { fill: #9aa7c7; font: 500 13px Inter, Arial, sans-serif; }
+    .panel-title { fill: #dee5ff; font: 700 22px Manrope, Inter, Arial, sans-serif; }
+    .panel-copy { fill: #a9b5d1; font: 500 15px Inter, Arial, sans-serif; }
+    .ko-title { fill: #ff9e9e; font: 700 18px Inter, Arial, sans-serif; }
+    .ko-copy { fill: #d5dbee; font: 500 14px Inter, Arial, sans-serif; }
+    .legend-copy { fill: #d5dbee; font: 500 14px Inter, Arial, sans-serif; }
+    .bubble16 { fill: #88adff; fill-opacity: 0.9; stroke: #e1ebff; stroke-width: 2; }
+    .bubble8 { fill: #53d2c7; fill-opacity: 0.9; stroke: #d8fffb; stroke-width: 2; }
+    .bubble4 { fill: #fab0ff; fill-opacity: 0.92; stroke: #ffe3ff; stroke-width: 2; }
+  </style>
+
+  <rect width="1400" height="860" rx="28" fill="url(#bg)"/>
+  <rect x="36" y="36" width="1328" height="788" rx="26" fill="url(#panel)"/>
+
+  <text x="72" y="92" class="title">Gemma 4 Throughput vs Model Size on RTX 5090</text>
+  <text x="72" y="124" class="subtitle">X = total model size in billions of parameters, Y = measured generation tokens per second, bubble size = bit-depth.</text>
+
+  <g transform="translate(88,170)">
+    <rect x="0" y="0" width="860" height="560" rx="18" fill="#0a1326"/>
+
+    <line x1="0" y1="560" x2="860" y2="560" class="axis"/>
+    <line x1="0" y1="0" x2="0" y2="560" class="axis"/>
+
+    <line x1="0" y1="560" x2="860" y2="560" class="grid"/>
+    <line x1="0" y1="466.7" x2="860" y2="466.7" class="grid"/>
+    <line x1="0" y1="373.3" x2="860" y2="373.3" class="grid"/>
+    <line x1="0" y1="280.0" x2="860" y2="280.0" class="grid"/>
+    <line x1="0" y1="186.7" x2="860" y2="186.7" class="grid"/>
+    <line x1="0" y1="93.3" x2="860" y2="93.3" class="grid"/>
+    <line x1="0" y1="0" x2="860" y2="0" class="grid"/>
+
+    <line x1="0" y1="0" x2="0" y2="560" class="grid"/>
+    <line x1="140.1" y1="0" x2="140.1" y2="560" class="grid"/>
+    <line x1="280.1" y1="0" x2="280.1" y2="560" class="grid"/>
+    <line x1="420.2" y1="0" x2="420.2" y2="560" class="grid"/>
+    <line x1="560.3" y1="0" x2="560.3" y2="560" class="grid"/>
+    <line x1="700.3" y1="0" x2="700.3" y2="560" class="grid"/>
+    <line x1="840.4" y1="0" x2="840.4" y2="560" class="grid"/>
+
+    <text x="-26" y="565" class="tick">0</text>
+    <text x="-34" y="472" class="tick">50</text>
+    <text x="-42" y="378" class="tick">100</text>
+    <text x="-42" y="285" class="tick">150</text>
+    <text x="-42" y="192" class="tick">200</text>
+    <text x="-42" y="98" class="tick">250</text>
+    <text x="-42" y="14" class="tick">300</text>
+
+    <text x="-4" y="592" class="tick">0</text>
+    <text x="132" y="592" class="tick">5</text>
+    <text x="270" y="592" class="tick">10</text>
+    <text x="410" y="592" class="tick">15</text>
+    <text x="548" y="592" class="tick">20</text>
+    <text x="688" y="592" class="tick">25</text>
+    <text x="827" y="592" class="tick">30</text>
+
+    <text x="320" y="632" class="label">Model size (B parameters)</text>
+    <text x="-150" y="-54" transform="rotate(-90)" class="label">Generation tokens / second</text>
+
+    <circle cx="130.2" cy="530.2" r="22" class="bubble16"/>
+    <text x="160" y="527" class="label">E2B BF16</text>
+    <text x="160" y="545" class="tick">4.65B · 15.96 tok/s</text>
+
+    <circle cx="130.2" cy="105.8" r="16" class="bubble8"/>
+    <text x="154" y="101" class="label">E2B Q8_0</text>
+    <text x="154" y="119" class="tick">4.65B · 243.41 tok/s</text>
+
+    <circle cx="130.2" cy="27.5" r="11" class="bubble4"/>
+    <text x="150" y="24" class="label">E2B Q4_0</text>
+    <text x="150" y="42" class="tick">4.65B · 285.29 tok/s</text>
+
+    <circle cx="210.6" cy="535.3" r="22" class="bubble16"/>
+    <text x="241" y="532" class="label">E4B BF16</text>
+    <text x="241" y="550" class="tick">7.52B · 13.23 tok/s</text>
+
+    <circle cx="210.6" cy="271.0" r="16" class="bubble8"/>
+    <text x="235" y="266" class="label">E4B Q8_0</text>
+    <text x="235" y="284" class="tick">7.52B · 154.83 tok/s</text>
+
+    <circle cx="210.6" cy="202.9" r="11" class="bubble4"/>
+    <text x="229" y="198" class="label">E4B Q4_0</text>
+    <text x="229" y="216" class="tick">7.52B · 191.27 tok/s</text>
+
+    <circle cx="706.4" cy="248.7" r="16" class="bubble8"/>
+    <text x="729" y="244" class="label">26B A4B Q8_0</text>
+    <text x="729" y="262" class="tick">25.23B · 166.75 tok/s</text>
+
+    <circle cx="706.4" cy="215.6" r="11" class="bubble4"/>
+    <text x="724" y="211" class="label">26B A4B Q4_0</text>
+    <text x="724" y="229" class="tick">25.23B · 184.50 tok/s</text>
+
+    <circle cx="860.0" cy="436.6" r="11" class="bubble4"/>
+    <text x="708" y="432" class="label">31B Q4_0</text>
+    <text x="708" y="450" class="tick">30.70B · 66.12 tok/s</text>
+  </g>
+
+  <g transform="translate(995,188)">
+    <text class="panel-title" x="0" y="0">Bit-depth legend</text>
+    <circle cx="22" cy="46" r="22" class="bubble16"/>
+    <text class="legend-copy" x="58" y="52">16-bit</text>
+    <circle cx="22" cy="102" r="16" class="bubble8"/>
+    <text class="legend-copy" x="58" y="108">8-bit</text>
+    <circle cx="22" cy="150" r="11" class="bubble4"/>
+    <text class="legend-copy" x="58" y="156">4-bit</text>
+  </g>
+
+  <g transform="translate(995,360)">
+    <text class="panel-title" x="0" y="0">KO</text>
+    <text class="panel-copy" x="0" y="28">Measured separately and shown outside the plot.</text>
+
+    <rect x="0" y="54" width="300" height="96" rx="16" fill="#151d33"/>
+    <text class="ko-title" x="18" y="86">Gemma 4 26B A4B BF16</text>
+    <text class="ko-copy" x="18" y="116">KO</text>
+    <text class="ko-copy" x="50" y="116">Windows paging file / commit limit failure</text>
+
+    <rect x="0" y="168" width="300" height="96" rx="16" fill="#151d33"/>
+    <text class="ko-title" x="18" y="200">Gemma 4 31B BF16</text>
+    <text class="ko-copy" x="18" y="230">KO</text>
+    <text class="ko-copy" x="50" y="230">Windows paging file / commit limit failure</text>
+
+    <rect x="0" y="282" width="300" height="110" rx="16" fill="#151d33"/>
+    <text class="ko-title" x="18" y="314">Gemma 4 31B Q8_0</text>
+    <text class="ko-copy" x="18" y="344">KO</text>
+    <text class="ko-copy" x="50" y="344">CUDA load failure on the tested</text>
+    <text class="ko-copy" x="50" y="366">llama.cpp CUDA build</text>
+  </g>
+</svg>

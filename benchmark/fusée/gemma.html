@@ -1,0 +1,259 @@
+Voici un simulateur de fusée complet contenu dans un seul fichier HTML. 
+
+Ce simulateur utilise l'API **Canvas HTML5** pour le rendu et un moteur physique simple pour gérer l'accélération, la gravité et le changement d'arrière-plan (de la Terre vers le vide spatial).
+
+Copiez le code suivant et enregistrez-le sous le nom `simulateur_fusee.html`.
+
+```html
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulateur de Vol Spatial</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        }
+
+        .stat {
+            font-size: 1.2rem;
+            margin-bottom: 5px;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            text-align: center;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 1.5rem;
+            cursor: pointer;
+            background: linear-gradient(to bottom, #ff4b2b, #ff416c);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            box-shadow: 0 4px 15px rgba(255, 75, 43, 0.4);
+            transition: all 0.2s;
+            pointer-events: auto;
+        }
+
+        button:active {
+            transform: scale(0.95);
+        }
+
+        button:disabled {
+            background: #555;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        #message {
+            position: absolute;
+            top: 40%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 3rem;
+            font-weight: bold;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 1s;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="stat">Altitude: <span id="alt">0</span> km</div>
+        <div class="stat">Vitesse: <span id="vel">0</span> km/s</div>
+    </div>
+
+    <div id="message">SORTIE DE L'ATMOSPHÈRE !</div>
+
+    <div id="controls">
+        <button id="launchBtn">LANCER LA FUSÉE 🚀</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const launchBtn = document.getElementById('launchBtn');
+        const altDisplay = document.getElementById('alt');
+        const velDisplay = document.getElementById('vel');
+        const message = document.getElementById('message');
+
+        // Configuration
+        let width, height;
+        let altitude = 0;
+        let velocity = 0;
+        let acceleration = 0;
+        let isLaunched = false;
+        let stars = [];
+
+        // Physique
+        const GRAVITY = 0.05; 
+        const THRUST = 0.15;
+
+        function resize() {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width;
+            canvas.height = height;
+            initStars();
+        }
+
+        function initStars() {
+            stars = [];
+            for(let i=0; i<200; i++) {
+                stars.push({
+                    x: Math.random() * width,
+                    y: Math.random() * height,
+                    size: Math.random() * 2,
+                    speed: Math.random() * 2 + 1
+                });
+            }
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        launchBtn.addEventListener('click', () => {
+            isLaunched = true;
+            launchBtn.disabled = true;
+            launchBtn.innerText = "MOTEURS ACTIFS...";
+        });
+
+        function drawRocket(x, y, isFiring) {
+            // Flammes
+            if (isFiring) {
+                ctx.beginPath();
+                ctx.fillStyle = Math.random() > 0.5 ? '#ff6a00' : '#ffcc00';
+                ctx.moveTo(x - 10, y + 40);
+                ctx.lineTo(x, y + 60 + Math.random() * 20);
+                ctx.lineTo(x + 10, y + 40);
+                ctx.fill();
+            }
+
+            // Corps de la fusée
+            ctx.fillStyle = '#ddd';
+            ctx.fillRect(x - 10, y, 20, 40);
+            
+            // Nez
+            ctx.beginPath();
+            ctx.fillStyle = '#ff0000';
+            ctx.moveTo(x - 10, y);
+            ctx.lineTo(x, y - 20);
+            ctx.lineTo(x + 10, y);
+            ctx.fill();
+
+            // Ailes
+            ctx.fillStyle = '#aa0000';
+            ctx.beginPath();
+            ctx.moveTo(x - 10, y + 20);
+            ctx.lineTo(x - 20, y + 40);
+            ctx.lineTo(x - 10, y + 40);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(x + 10, y + 20);
+            ctx.lineTo(x + 20, y + 40);
+            ctx.lineTo(x + 10, y + 40);
+            ctx.fill();
+        }
+
+        function update() {
+            if (isLaunched) {
+                acceleration = THRUST - GRAVITY;
+                velocity += acceleration;
+                altitude += velocity;
+
+                if (altitude < 0) altitude = 0;
+            }
+
+            // Mise à jour UI
+            altDisplay.innerText = Math.floor(altitude);
+            velDisplay.innerText = (velocity * 10).toFixed(2);
+
+            // Message d'espace
+            if (altitude > 100 && altitude < 110) {
+                message.style.opacity = 1;
+                setTimeout(() => message.style.opacity = 0, 3000);
+            }
+        }
+
+        function draw() {
+            // Couleur du ciel basée sur l'altitude
+            // De bleu (0) à noir (1000)
+            let skyBlue = Math.max(0, 135 - altitude / 10);
+            let skyGreen = Math.max(0, 206 - altitude / 5);
+            let skyRed = Math.max(0, 235 - altitude / 5);
+            ctx.fillStyle = `rgb(${skyRed}, ${skyGreen}, ${skyBlue})`;
+            ctx.fillRect(0, 0, width, height);
+
+            // Étoiles (visibles quand le ciel s'assombrit)
+            let starOpacity = Math.min(1, altitude / 500);
+            ctx.fillStyle = `rgba(255, 255, 255, ${starOpacity})`;
+            stars.forEach(star => {
+                ctx.beginPath();
+                ctx.arc(star.x, star.y, star.size, 0, Math.PI * 2);
+                ctx.fill();
+
+                if (isLaunched) {
+                    star.y += star.speed * (velocity + 1);
+                    if (star.y > height) star.y = 0;
+                }
+            });
+
+            // Sol (disparaît avec l'altitude)
+            if (altitude < 2000) {
+                ctx.fillStyle = '#2d5a27';
+                let groundY = height - 20 + altitude; 
+                ctx.fillRect(0, groundY, width, height);
+            }
+
+            // Dessiner la fusée (elle reste au centre, c'est le monde qui bouge)
+            drawRocket(width / 2, height / 2, isLaunched);
+
+            update();
+            requestAnimationFrame(draw);
+        }
+
+        draw();
+    </script>
+</body>
+</html>
+```
+
+### Comment utiliser ce simulateur :
+1.  Copiez le code ci-dessus.
+2.  Créez un nouveau fichier sur votre ordinateur et nommez-le `fusée.html`.
+3.  Ouvrez ce fichier avec n'importe quel navigateur web (Chrome, Firefox, Edge).
+4.  Cliquez sur le bouton **"LANCER LA FUSÉE"**.
+
+### Détails techniques du simulateur :
+*   **Physique :** Le programme calcule la vitesse en ajoutant une poussée constante moins la gravité :
+    $$\text{Accélération} = \text{Poussée} - \text{Gravité}$$
+*   **Effet Visuel :** 
+    *   Le ciel passe dynamiquement du **bleu clair** au **noir profond** à mesure que l'altitude augmente.
+    *   Les étoiles apparaissent et défilent plus rapidement à mesure que la vitesse augmente.
+    *   Le sol s'éloigne vers le bas de l'écran pour simuler l'ascension.
+*   **Performance :** Utilisation de `requestAnimationFrame` pour un mouvement fluide à 60 images par seconde.

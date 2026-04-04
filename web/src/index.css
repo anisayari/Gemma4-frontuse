@@ -1,0 +1,108 @@
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;700;800&family=Inter:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,500,0,0');
+
+:root {
+  color-scheme: dark;
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  --font-headline: 'Manrope', 'Segoe UI', sans-serif;
+  --font-body: 'Inter', 'Segoe UI', sans-serif;
+  --background: #060e20;
+  --surface: #060e20;
+  --surface-container-low: #091328;
+  --surface-container-high: #141f38;
+  --surface-container-highest: #192540;
+  --secondary-container: #38485d;
+  --primary: #88adff;
+  --primary-container: #719eff;
+  --tertiary: #fab0ff;
+  --on-primary-container: #002052;
+  --on-surface: #dee5ff;
+  --on-secondary-container: #c1d1eb;
+  --on-surface-variant: #a3aac4;
+  --on-error-container: #ffa8a3;
+  --outline-variant: #40485d;
+  --primary-gradient: linear-gradient(135deg, #88adff 0%, #719eff 100%);
+  --ambient-shadow: 0 24px 64px rgba(222, 229, 255, 0.06);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  font-family: var(--font-body);
+  color: var(--on-surface);
+  background:
+    radial-gradient(circle at 12% 18%, rgba(136, 173, 255, 0.14), transparent 28%),
+    radial-gradient(circle at 88% 14%, rgba(250, 176, 255, 0.11), transparent 22%),
+    radial-gradient(circle at 50% 100%, rgba(113, 158, 255, 0.09), transparent 30%),
+    linear-gradient(180deg, #060e20 0%, #060d1d 52%, #050a16 100%);
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.42), transparent 74%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+::selection {
+  background: rgba(113, 158, 255, 0.32);
+  color: #002052;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+img,
+audio {
+  display: block;
+  max-width: 100%;
+}
+
+#root {
+  min-height: 100vh;
+  isolation: isolate;
+}
+
+.material-symbols-outlined {
+  font-family: 'Material Symbols Outlined';
+  font-weight: normal;
+  font-style: normal;
+  font-size: 1.25rem;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 500,
+    'GRAD' 0,
+    'opsz' 24;
+  -webkit-font-smoothing: antialiased;
+}

@@ -1,0 +1,79 @@
+{
+  "timestamp_utc": "2026-04-04T17:41:02.670573+00:00",
+  "hardware": {
+    "name": "NVIDIA GeForce RTX 5090",
+    "driver_version": "581.42",
+    "memory_total_mib": 32607
+  },
+  "config": {
+    "max_new_tokens": 128,
+    "warmup_tokens": 32,
+    "runs": 2,
+    "local_only": true,
+    "cache_dir": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\.hf-cache",
+    "prompt": "Explain in a compact technical paragraph why local multimodal inference throughput matters for a desktop copilot."
+  },
+  "results": [
+    {
+      "model_key": "e2b",
+      "label": "Gemma 4 E2B",
+      "hf_model_id": "google/gemma-4-E2B-it",
+      "architecture": "Dense",
+      "tier": "Edge",
+      "quantization": "bf16",
+      "official_bf16_memory_gib": 9.6,
+      "gpu_total_memory_gib": 31.84,
+      "windows_commit_before": {
+        "total_physical_gib": 63.61,
+        "available_physical_gib": 27.24,
+        "commit_limit_gib": 115.61,
+        "available_commit_gib": 36.35
+      },
+      "load_seconds": 10.6906,
+      "status": "ok",
+      "device_map": null,
+      "vram_allocated_after_load_gib": 9.54,
+      "vram_reserved_after_load_gib": 9.67,
+      "warmup": {
+        "elapsed_seconds": 2.6744,
+        "input_tokens": 51,
+        "generated_tokens": 32,
+        "tokens_per_second": 11.97,
+        "peak_vram_allocated_gib": 9.56,
+        "peak_vram_reserved_gib": 9.67
+      },
+      "runs": [
+        {
+          "elapsed_seconds": 5.8016,
+          "input_tokens": 51,
+          "generated_tokens": 94,
+          "tokens_per_second": 16.2,
+          "peak_vram_allocated_gib": 9.56,
+          "peak_vram_reserved_gib": 9.67
+        },
+        {
+          "elapsed_seconds": 5.984,
+          "input_tokens": 51,
+          "generated_tokens": 94,
+          "tokens_per_second": 15.71,
+          "peak_vram_allocated_gib": 9.56,
+          "peak_vram_reserved_gib": 9.67
+        }
+      ],
+      "summary": {
+        "median_tokens_per_second": 16.2,
+        "mean_tokens_per_second": 15.96,
+        "best_tokens_per_second": 16.2,
+        "worst_tokens_per_second": 15.71,
+        "mean_elapsed_seconds": 5.8928,
+        "generated_tokens_per_run": 128
+      },
+      "windows_commit_after": {
+        "total_physical_gib": 63.61,
+        "available_physical_gib": 25.34,
+        "commit_limit_gib": 115.61,
+        "available_commit_gib": 24.66
+      }
+    }
+  ]
+}

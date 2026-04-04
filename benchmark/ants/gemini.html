@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulation de Colonies de Fourmis</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1a1a1a;
+            color: #eee;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            overflow: hidden;
+        }
+
+        #controls {
+            background: #2d2d2d;
+            padding: 15px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+            z-index: 10;
+        }
+
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+
+        label { font-size: 0.8rem; color: #bbb; }
+        
+        canvas {
+            background-color: #000;
+            cursor: crosshair;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        .stats {
+            position: absolute;
+            top: 80px;
+            left: 20px;
+            background: rgba(0,0,0,0.7);
+            padding: 10px;
+            border-radius: 5px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <div class="control-group">
+            <label>Nombre de Fourmis</label>
+            <input type="range" id="antCount" min="10" max="1000" value="200">
+        </div>
+        <div class="control-group">
+            <label>Vitesse d'Évaporation</label>
+            <input type="range" id="evapRate" min="1" max="100" value="10">
+        </div>
+        <div class="control-group">
+            <button id="resetBtn">Réinitialiser</button>
+        </div>
+        <div class="control-group" style="margin-left: 20px; font-weight: bold; color: #ffcc00;">
+            <span>Cliquez pour ajouter de la nourriture !</span>
+        </div>
+    </div>
+
+    <div class="stats">
+        Nourriture récoltée: <span id="foodScore">0</span>
+    </div>
+
+    <canvas id="simCanvas"></canvas>
+
+<script>
+/**
+ * Logique de Simulation
+ * 
+ * Les fourmis suivent un modèle probabiliste :
+ * 1. Si elle n'a pas de nourriture : elle cherche des phéromones "Nourriture" -> Nid.
+ * 2. Si elle a de la nourriture : elle cherche des phéromones "Nid" -> Nourriture.
+ * 3. Sinon, elle erre aléatoirement.
+ */
+
+const canvas = document.getElementById('simCanvas');
+const ctx = canvas.getContext('2d', { alpha: false });
+const foodScoreEl = document.getElementById('foodScore');
+
+// Paramètres
+let width, height;
+let ants = [];
+let foodSources = [];
+let foodCollected = 0;
+
+// Grilles de phéromones (Pheromone Maps)
+// 0: Phéromone vers la nourriture, 1: Phéromone vers le nid
+let pheromones; 
+const pH_RES = 4; // Résolution de la grille (plus c'est haut, plus c'est rapide)
+
+const config = {
+    antCount: () => parseInt(document.getElementById('antCount').value),
+    evapRate: () => parseInt(document.getElementById('evapRate').value) / 1000,
+    sensorAngle: Math.PI / 4,
+    sensorDist: 20,
+    turnSpeed: 0.2
+};
+
+class Ant {
+    constructor() {
+        this.reset();
+    }
+
+    reset() {
+        this.x = width / 2;
+        this.y = height / 2;
+        this.angle = Math.random() * Math.PI * 2;
+        this.hasFood = false;
+        this.speed = 2;
+    }
+
+    update() {
+        // 1. Sensing (Détection des phéromones)
+        this.sense();
+
+        // 2. Movement
+        this.x += Math.cos(this.angle) * this.speed;
+        this.y += Math.sin(this.angle) * this.speed;
+
+        // Rebond sur les murs
+        if (this.x < 0 || this.x > width) {
+            this.angle = Math.PI - this.angle;
+            this.x = Math.max(0, Math.min(width, this.x));
+        }
+        if (this.y < 0 || this.y > height) {
+            this.angle = -this.angle;
+            this.y = Math.max(0, Math.min(height, this.y));
+        }
+
+        // 3. Interaction avec la nourriture et le nid
+        this.interact();
+
+        // 4. Dépôt de phéromones
+        this.deposit();
+    }
+
+    sense() {
+        const sensorDist = config.sensorDist;
+        const sensorAngle = config.sensorAngle;
+        const mapIdx = this.hasFood ? 0 : 1; // Si j'ai de la nourriture, je cherche le nid (index 0)
+
+        const vCenter = this.getSensorValue(0, mapIdx);
+        const vLeft = this.getSensorValue(-sensorAngle, mapIdx);
+        const vRight = this.getSensorValue(sensorAngle, mapIdx);
+
+        if (vCenter > vLeft && vCenter > vRight) {
+            // Continue tout droit
+        } else if (vLeft > vRight) {
+            this.angle -= config.turnSpeed;
+        } else if (vRight > vLeft) {
+            this.angle += config.turnSpeed;
+        } else {
+            this.angle += (Math.random() - 0.5) * 0.2;
+        }
+    }
+
+    getSensorValue(angleOffset, mapIdx) {
+        const sx = this.x + Math.cos(this.angle + angleOffset) * config.sensorDist;
+        const sy = this.y + Math.sin(this.angle + angleOffset) * config.sensorDist;
+        const gx = Math.floor(sx / pH_RES);
+        const gy = Math.floor(sy / pH_RES);
+        
+        if (gx >= 0 && gx < pheromones[0].length && gy >= 0 && gy < pheromones.length) {
+            return pheromones[gy][gx][mapIdx];
+        }
+        return -1;
+    }
+
+    interact() {
+        // Vers le nid (centre)
+        const distToNest = Math.hypot(this.x - width/2, this.y - height/2);
+        if (this.hasFood && distToNest < 20) {
+            this.hasFood = false;
+            this.angle += Math.PI;
+            foodCollected++;
+            foodScoreEl.innerText = foodCollected;
+        }
+
+        // Vers la nourriture
+        for (let i = foodSources.length - 1; i >= 0; i--) {
+            const f = foodSources[i];
+            const dist = Math.hypot(this.x - f.x, this.y - f.y);
+            if (!this.hasFood && dist < f.radius) {
+                this.hasFood = true;
+                this.angle += Math.PI;
+                f.amount--;
+                if (f.amount <= 0) foodSources.splice(i, 1);
+            }
+        }
+    }
+
+    deposit() {
+        const gx = Math.floor(this.x / pH_RES);
+        const gy = Math.floor(this.y / pH_RES);
+        const mapIdx = this.hasFood ? 1 : 0; // Dépôt inverse de la recherche
+
+        if (gx >= 0 && gx < pheromones[0].length && gy >= 0 && gy < pheromones.length) {
+            pheromones[gy][gx][mapIdx] = Math.min(255, pheromones[gy][gx][mapIdx] + 10);
+        }
+    }
+}
+
+function init() {
+    width = canvas.width = window.innerWidth;
+    height = canvas.height = window.innerHeight - 70;
+    
+    // Initialisation grille phéromones [y][x][type]
+    const rows = Math.ceil(height / pH_RES);
+    const cols = Math.ceil(width / pH_RES);
+    pheromones = [];
+    for (let y = 0; y < rows; y++) {
+        let row = [];
+        for (let x = 0; x < cols; x++) {
+            row.push([0, 0]); 
+        }
+        pheromones.push(row);
+    }
+
+    ants = [];
+    for (let i = 0; i < config.antCount(); i++) {
+        ants.push(new Ant());
+    }
+    
+    foodSources = [];
+    foodCollected = 0;
+    foodScoreEl.innerText = 0;
+}
+
+function update() {
+    // Évaporation des phéromones
+    const evap = config.evapRate();
+    for (let y = 0; y < pheromones.length; y++) {
+        for (let x = 0; x < pheromones[0].length; x++) {
+            pheromones[y][x][0] *= (1 - evap);
+            pheromones[y][x][1] *= (1 - evap);
+        }
+    }
+
+    ants.forEach(ant => ant.update());
+}
+
+function draw() {
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, width, height);
+
+    // Dessin phéromones (simplifié pour performance)
+    for (let y = 0; y < pheromones.length; y++) {
+        for (let x = 0; x < pheromones[0].length; x++) {
+            const p = pheromones[y][x];
+            if (p[0] > 1 || p[1] > 1) {
+                // Bleu = vers nid, Rouge = vers nourriture
+                ctx.fillStyle = `rgb(${p[1]}, 50, ${p[0]})`;
+                ctx.fillRect(x * pH_RES, y * pH_RES, pH_RES, pH_RES);
+            }
+        }
+    }
+
+    // Dessin nourriture
+    ctx.fillStyle = '#4caf50';
+    foodSources.forEach(f => {
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+        ctx.fill();
+    });
+
+    // Dessin Nid
+    ctx.fillStyle = '#ffeb3b';
+    ctx.beginPath();
+    ctx.arc(width / 2, height / 2, 10, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Dessin Fourmis
+    ctx.fillStyle = 'white';
+    ants.forEach(ant => {
+        if (ant.hasFood) ctx.fillStyle = '#4caf50'; else ctx.fillStyle = 'white';
+        ctx.fillRect(ant.x, ant.y, 2, 2);
+    });
+
+    requestAnimationFrame(() => {
+        update();
+        draw();
+    });
+}
+
+// Events
+canvas.addEventListener('mousedown', (e) => {
+    foodSources.push({ x: e.clientX, y: e.clientY - 70, radius: 15, amount: 500 });
+});
+
+document.getElementById('resetBtn').addEventListener('click', init);
+
+window.addEventListener('resize', init);
+
+init();
+draw();
+
+</script>
+</body>
+</html>

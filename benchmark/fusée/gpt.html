@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Simulateur de Fusée - One Page</title>
+  <style>
+    :root{
+      --bg1:#7cc8ff;
+      --bg2:#dff4ff;
+      --panel:rgba(8,12,24,0.72);
+      --panel-border:rgba(255,255,255,0.12);
+      --text:#eef6ff;
+      --accent:#6cf;
+      --good:#5df29d;
+      --warn:#ffd166;
+      --danger:#ff6b6b;
+      --space:#050816;
+    }
+
+    *{box-sizing:border-box}
+    html,body{
+      margin:0;
+      width:100%;
+      height:100%;
+      overflow:hidden;
+      font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+      background:#000;
+      color:var(--text);
+    }
+
+    #app{
+      position:relative;
+      width:100%;
+      height:100%;
+      overflow:hidden;
+      background:linear-gradient(to top, var(--bg1), var(--bg2));
+    }
+
+    canvas{
+      position:absolute;
+      inset:0;
+      width:100%;
+      height:100%;
+      display:block;
+    }
+
+    .hud{
+      position:absolute;
+      top:16px;
+      left:16px;
+      width:min(360px, calc(100% - 32px));
+      background:var(--panel);
+      border:1px solid var(--panel-border);
+      border-radius:18px;
+      padding:14px 14px 12px;
+      backdrop-filter:blur(10px);
+      box-shadow:0 10px 30px rgba(0,0,0,0.35);
+      z-index:10;
+    }
+
+    .hud h1{
+      margin:0 0 10px;
+      font-size:1.1rem;
+      line-height:1.2;
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+
+    .badge{
+      font-size:0.72rem;
+      padding:4px 8px;
+      border-radius:999px;
+      background:rgba(108,204,255,0.15);
+      color:#bdeeff;
+      border:1px solid rgba(108,204,255,0.3);
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:10px;
+      margin-bottom:12px;
+    }
+
+    .stat{
+      background:rgba(255,255,255,0.05);
+      border:1px solid rgba(255,255,255,0.08);
+      border-radius:14px;
+      padding:10px;
+    }
+
+    .stat .label{
+      font-size:0.75rem;
+      opacity:0.8;
+      margin-bottom:4px;
+    }
+
+    .stat .value{
+      font-size:1.1rem;
+      font-weight:700;
+      letter-spacing:0.2px;
+    }
+
+    .controls{
+      display:flex;
+      flex-wrap:wrap;
+      gap:8px;
+      margin-bottom:10px;
+    }
+
+    button{
+      appearance:none;
+      border:none;
+      cursor:pointer;
+      border-radius:12px;
+      padding:10px 12px;
+      font-weight:700;
+      color:white;
+      transition:transform 0.08s ease, opacity 0.2s ease, background 0.2s ease;
+    }
+
+    button:active{transform:translateY(1px) scale(0.99)}
+    .primary{background:linear-gradient(135deg,#ff7b54,#ff4d4d)}
+    .secondary{background:linear-gradient(135deg,#4f8cff,#2bd1ff)}
+    .dark{background:linear-gradient(135deg,#293145,#151b2d)}
+    .success{background:linear-gradient(135deg,#22c55e,#16a34a)}
+    .warning{background:linear-gradient(135deg,#f59e0b,#d97706)}
+
+    .row{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      margin-top:8px;
+    }
+
+    input[type="range"]{
+      width:100%;
+      accent-color:#6cf;
+    }
+
+    .mini{
+      font-size:0.84rem;
+      opacity:0.9;
+    }
+
+    .bar{
+      height:10px;
+      width:100%;
+      background:rgba(255,255,255,0.08);
+      border-radius:999px;
+      overflow:hidden;
+      border:1px solid rgba(255,255,255,0.08);
+    }
+
+    .bar > span{
+      display:block;
+      height:100%;
+      width:0%;
+      background:linear-gradient(90deg,#6cf,#8affc1);
+      border-radius:999px;
+      transition:width 0.12s linear;
+    }
+
+    .legend{
+      margin-top:10px;
+      font-size:0.78rem;
+      line-height:1.5;
+      opacity:0.88;
+    }
+
+    .message{
+      position:absolute;
+      left:50%;
+      bottom:20px;
+      transform:translateX(-50%);
+      z-index:12;
+      background:rgba(5,8,18,0.75);
+      border:1px solid rgba(255,255,255,0.1);
+      border-radius:999px;
+      padding:10px 16px;
+      backdrop-filter:blur(8px);
+      font-weight:600;
+      text-align:center;
+      max-width:calc(100% - 30px);
+      box-shadow:0 8px 24px rgba(0,0,0,0.35);
+    }
+
+    .right-panel{
+      position:absolute;
+      top:16px;
+      right:16px;
+      width:min(260px, calc(100% - 32px));
+      background:rgba(8,12,24,0.58);
+      border:1px solid rgba(255,255,255,0.1);
+      border-radius:18px;
+      padding:12px;
+      backdrop-filter:blur(8px);
+      z-index:10;
+    }
+
+    .milestones{
+      display:flex;
+      flex-direction:column;
+      gap:8px;
+      font-size:0.86rem;
+    }
+
+    .milestone{
+      padding:8px 10px;
+      border-radius:12px;
+      background:rgba(255,255,255,0.04);
+      border:1px solid rgba(255,255,255,0.08);
+      opacity:0.7;
+    }
+
+    .milestone.done{
+      opacity:1;
+      border-color:rgba(93,242,157,0.5);
+      background:rgba(93,242,157,0.09);
+      color:#dffff0;
+    }
+
+    .footer-note{
+      position:absolute;
+      bottom:14px;
+      right:16px;
+      z-index:10;
+      font-size:0.8rem;
+      background:rgba(8,12,24,0.45);
+      border:1px solid rgba(255,255,255,0.08);
+      padding:8px 10px;
+      border-radius:12px;
+      opacity:0.9;
+    }
+
+    @media (max-width: 900px){
+      .right-panel{
+        top:auto;
+        bottom:80px;
+      }
+    }
+
+    @media (max-width: 680px){
+      .hud{
+        width:calc(100% - 20px);
+        left:10px;
+        top:10px;
+      }
+      .right-panel{
+        display:none;
+      }
+      .grid{
+        grid-template-columns:1fr 1fr;
+      }
+      .message{
+        bottom:12px;
+        font-size:0.92rem;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <canvas id="scene"></canvas>
+
+    <div class="hud">
+      <h1>
+        🚀 Simulateur de Fusée
+        <span class="badge">One Page HTML</span>
+      </h1>
+
+      <div class="grid">
+        <div class="stat">
+          <div class="label">Altitude</div>
+          <div class="value" id="altitude">0 km</div>
+        </div>
+        <div class="stat">
+          <div class="label">Vitesse verticale</div>
+          <div class="value" id="speed">0 m/s</div>
+        </div>
+        <div class="stat">
+          <div class="label">Carburant</div>
+          <div class="value" id="fuelText">100%</div>
+        </div>
+        <div class="stat">
+          <div class="label">État</div>
+          <div class="value" id="status">Au sol</div>
+        </div>
+      </div>
+
+      <div class="mini">Poussée moteur</div>
+      <div class="row">
+        <input id="throttle" type="range" min="0" max="100" value="100" />
+        <div id="throttleValue" style="min-width:56px; text-align:right; font-weight:700;">100%</div>
+      </div>
+
+      <div class="mini" style="margin-top:10px;">Réserve de carburant</div>
+      <div class="bar"><span id="fuelBar"></span></div>
+
+      <div class="controls" style="margin-top:12px;">
+        <button class="primary" id="launchBtn">Lancer</button>
+        <button class="secondary" id="boostBtn">Boost</button>
+        <button class="warning" id="stageBtn">Séparer étage</button>
+        <button class="dark" id="resetBtn">Réinitialiser</button>
+      </div>
+
+      <div class="legend">
+        <div>• Lance la fusée puis règle la poussée.</div>
+        <div>• Passe la ligne de Kármán à <strong>100 km</strong>.</div>
+        <div>• Continue jusqu’à l’espace profond.</div>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div style="font-weight:800; margin-bottom:10px;">Objectifs</div>
+      <div class="milestones">
+        <div class="milestone" id="m1">Décollage</div>
+        <div class="milestone" id="m2">Atmosphère supérieure — 20 km</div>
+        <div class="milestone" id="m3">Mésosphère — 50 km</div>
+        <div class="milestone" id="m4">Espace — 100 km</div>
+        <div class="milestone" id="m5">Orbital symbolique — 500 km</div>
+        <div class="milestone" id="m6">Au-delà — 1 000 km</div>
+        <div class="milestone" id="m7">Espace profond — 10 000 km</div>
+      </div>
+    </div>
+
+    <div class="message" id="message">Prêt au lancement.</div>
+    <div class="footer-note">Astuce : clique sur Boost pour une forte accélération temporaire.</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("scene");
+    const ctx = canvas.getContext("2d");
+
+    const altitudeEl = document.getElementById("altitude");
+    const speedEl = document.getElementById("speed");
+    const fuelTextEl = document.getElementById("fuelText");
+    const fuelBarEl = document.getElementById("fuelBar");
+    const statusEl = document.getElementById("status");
+    const throttleEl = document.getElementById("throttle");
+    const throttleValueEl = document.getElementById("throttleValue");
+    const launchBtn = document.getElementById("launchBtn");
+    const boostBtn = document.getElementById("boostBtn");
+    const stageBtn = document.getElementById("stageBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const messageEl = document.getElementById("message");
+
+    const milestones = {
+      m1: document.getElementById("m1"),
+      m2: document.getElementById("m2"),
+      m3: document.getElementById("m3"),
+      m4: document.getElementById("m4"),
+      m5: document.getElementById("m5"),
+      m6: document.getElementById("m6"),
+      m7: document.getElementById("m7"),
+    };
+
+    let w = canvas.width = window.innerWidth * devicePixelRatio;
+    let h = canvas.height = window.innerHeight * devicePixelRatio;
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+
+    let vw = window.innerWidth;
+    let vh = window.innerHeight;
+
+    window.addEventListener("resize", () => {
+      vw = window.innerWidth;
+      vh = window.innerHeight;
+      canvas.width = vw * devicePixelRatio;
+      canvas.height = vh * devicePixelRatio;
+      ctx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+    });
+
+    const state = {
+      launched: false,
+      stageSeparated: false,
+      boostTimer: 0,
+      time: 0,
+      altitude: 0,     // km
+      velocity: 0,     // m/s
+      fuel: 100,
+      throttle: 1,
+      shake: 0,
+      message: "Prêt au lancement."
+    };
+
+    const stars = Array.from({ length: 260 }, () => ({
+      x: Math.random(),
+      y: Math.random(),
+      r: Math.random() * 2 + 0.2,
+      a: Math.random() * 0.8 + 0.2
+    }));
+
+    const particles = [];
+
+    function addParticle(x, y, vx, vy, life, color, size){
+      particles.push({x,y,vx,vy,life,maxLife:life,color,size});
+    }
+
+    function setMessage(msg){
+      state.message = msg;
+      messageEl.textContent = msg;
+    }
+
+    function formatAltitude(km){
+      if (km < 1000) return km.toFixed(1) + " km";
+      return km.toLocaleString("fr-FR", {maximumFractionDigits:1}) + " km";
+    }
+
+    function formatSpeed(ms){
+      return ms.toLocaleString("fr-FR", {maximumFractionDigits:0}) + " m/s";
+    }
+
+    function updateHUD(){
+      altitudeEl.textContent = formatAltitude(state.altitude);
+      speedEl.textContent = formatSpeed(state.velocity);
+      fuelTextEl.textContent = state.fuel.toFixed(1) + "%";
+      fuelBarEl.style.width = Math.max(0, state.fuel) + "%";
+      throttleValueEl.textContent = Math.round(state.throttle * 100) + "%";
+
+      let status = "Au sol";
+      if (state.launched) status = "Ascension";
+      if (state.altitude >= 20) status = "Atmosphère supérieure";
+      if (state.altitude >= 100) status = "Dans l'espace";
+      if (state.altitude >= 1000) status = "Au-delà";
+      if (state.fuel <= 0 && state.altitude > 0) status = "En inertie";
+      statusEl.textContent = status;
+
+      milestones.m1.classList.toggle("done", state.launched);
+      milestones.m2.classList.toggle("done", state.altitude >= 20);
+      milestones.m3.classList.toggle("done", state.altitude >= 50);
+      milestones.m4.classList.toggle("done", state.altitude >= 100);
+      milestones.m5.classList.toggle("done", state.altitude >= 500);
+      milestones.m6.classList.toggle("done", state.altitude >= 1000);
+      milestones.m7.classList.toggle("done", state.altitude >= 10000);
+    }
+
+    throttleEl.addEventListener("input", () => {
+      state.throttle = Number(throttleEl.value) / 100;
+      updateHUD();
+    });
+
+    launchBtn.addEventListener("click", () => {
+      if (!state.launched) {
+        state.launched = true;
+        state.velocity = Math.max(state.velocity, 8);
+        state.shake = 16;
+        setMessage("Allumage moteur... décollage !");
+      }
+    });
+
+    boostBtn.addEventListener("click", () => {
+      if (!state.launched) {
+        setMessage("Lance d'abord la fusée.");
+        return;
+      }
+      if (state.fuel <= 0) {
+        setMessage("Plus de carburant pour le boost.");
+        return;
+      }
+      state.boostTimer = 2.5;
+      state.shake = 18;
+      setMessage("Boost activé !");
+    });
+
+    stageBtn.addEventListener("click", () => {
+      if (!state.launched) {
+        setMessage("La séparation d'étage se fait en vol.");
+        return;
+      }
+      if (state.stageSeparated) {
+        setMessage("L'étage a déjà été séparé.");
+        return;
+      }
+      state.stageSeparated = true;
+      state.velocity += 180;
+      state.shake = 10;
+      setMessage("Séparation d'étage réussie. La fusée s'allège !");
+      for(let i=0;i<25;i++){
+        addParticle(vw/2 + (Math.random()-0.5)*40, vh*0.72, (Math.random()-0.5)*60, Math.random()*120+40, 1.4, "255,180,80", Math.random()*4+2);
+      }
+    });
+
+    resetBtn.addEventListener("click", resetSim);
+
+    function resetSim(){
+      state.launched = false;
+      state.stageSeparated = false;
+      state.boostTimer = 0;
+      state.time = 0;
+      state.altitude = 0;
+      state.velocity = 0;
+      state.fuel = 100;
+      state.throttle = 1;
+      state.shake = 0;
+      throttleEl.value = 100;
+      particles.length = 0;
+      setMessage("Prêt au lancement.");
+      updateHUD();
+    }
+
+    function getSkyGradient(){
+      const a = state.altitude;
+
+      if (a < 20) {
+        return ["#87ceeb", "#dff6ff"];
+      } else if (a < 50) {
+        return ["#4b78c2", "#9fc3ff"];
+      } else if (a < 100) {
+        return ["#1d2a64", "#516bb5"];
+      } else if (a < 500) {
+        return ["#090d1f", "#182a57"];
+      } else {
+        return ["#02040c", "#0b1330"];
+      }
+    }
+
+    function drawBackground(){
+      const [topColor, bottomColor] = getSkyGradient();
+      const grad = ctx.createLinearGradient(0, 0, 0, vh);
+      grad.addColorStop(0, topColor);
+      grad.addColorStop(1, bottomColor);
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, vw, vh);
+
+      const starAlpha = Math.min(1, Math.max(0, (state.altitude - 40) / 120));
+      if (starAlpha > 0){
+        for (const s of stars){
+          const x = s.x * vw;
+          const y = ((s.y * vh) + (state.time * 10 * s.r)) % vh;
+          ctx.beginPath();
+          ctx.fillStyle = `rgba(255,255,255,${s.a * starAlpha})`;
+          ctx.arc(x, y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      if (state.altitude < 150) {
+        drawGroundAndClouds();
+      } else {
+        drawEarthCurve();
+      }
+    }
+
+    function drawGroundAndClouds(){
+      const groundY = vh * 0.86;
+      ctx.fillStyle = "#274b2f";
+      ctx.fillRect(0, groundY, vw, vh - groundY);
+
+      ctx.fillStyle = "#3d6c42";
+      for(let i=0;i<8;i++){
+        const x = (i / 7) * vw;
+        ctx.beginPath();
+        ctx.arc(x, groundY, 60 + (i % 3) * 20, Math.PI, 0);
+        ctx.fill();
+      }
+
+      const cloudOpacity = Math.max(0, 1 - state.altitude / 30);
+      if (cloudOpacity > 0){
+        ctx.fillStyle = `rgba(255,255,255,${0.75 * cloudOpacity})`;
+        for(let i=0;i<6;i++){
+          const cx = (i * 190 + state.time * 18) % (vw + 240) - 120;
+          const cy = 100 + (i % 3) * 80;
+          cloud(cx, cy, 1 + (i % 2) * 0.3);
+        }
+      }
+    }
+
+    function cloud(x, y, scale){
+      ctx.beginPath();
+      ctx.arc(x, y, 24 * scale, 0, Math.PI * 2);
+      ctx.arc(x + 28 * scale, y - 10 * scale, 20 * scale, 0, Math.PI * 2);
+      ctx.arc(x + 54 * scale, y, 26 * scale, 0, Math.PI * 2);
+      ctx.arc(x + 26 * scale, y + 10 * scale, 24 * scale, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function drawEarthCurve(){
+      const t = Math.min(1, (state.altitude - 150) / 900);
+      const radius = vw * (1.2 - 0.35 * t);
+      const centerX = vw / 2;
+      const centerY = vh + radius * (0.55 + 0.1 * t);
+
+      const earthGrad = ctx.createRadialGradient(centerX, centerY, radius * 0.4, centerX, centerY, radius);
+      earthGrad.addColorStop(0, "#2e9fff");
+      earthGrad.addColorStop(0.55, "#1558b0");
+      earthGrad.addColorStop(1, "#0b1a3c");
+
+      ctx.fillStyle = earthGrad;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius, Math.PI, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "rgba(135,220,255,0.5)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, radius - 2, Math.PI, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    function drawRocket(){
+      const screenY = vh * 0.72;
+      const driftX = Math.sin(state.time * 0.8) * Math.min(20, state.altitude * 0.02);
+      const shakeX = state.shake > 0 ? (Math.random() - 0.5) * state.shake : 0;
+      const x = vw / 2 + driftX + shakeX;
+      const y = screenY;
+
+      ctx.save();
+      ctx.translate(x, y);
+
+      const tilt = Math.sin(state.time * 1.2) * 0.03;
+      ctx.rotate(tilt);
+
+      // Flame
+      const engineOn = state.launched && state.fuel > 0 && state.throttle > 0;
+      if (engineOn){
+        const flameLen = 40 + state.throttle * 70 + (state.boostTimer > 0 ? 45 : 0) + Math.random() * 18;
+        const flameGrad = ctx.createLinearGradient(0, 45, 0, 45 + flameLen);
+        flameGrad.addColorStop(0, "rgba(255,255,255,0.95)");
+        flameGrad.addColorStop(0.25, "rgba(255,230,120,0.95)");
+        flameGrad.addColorStop(0.65, "rgba(255,120,20,0.85)");
+        flameGrad.addColorStop(1, "rgba(255,40,0,0)");
+        ctx.fillStyle = flameGrad;
+        ctx.beginPath();
+        ctx.moveTo(-10, 44);
+        ctx.quadraticCurveTo(0, 45 + flameLen, 10, 44);
+        ctx.closePath();
+        ctx.fill();
+
+        for(let i=0;i<3;i++){
+          addParticle(
+            x + (Math.random()-0.5)*8,
+            y + 50,
+            (Math.random()-0.5)*20,
+            140 + Math.random()*120,
+            0.6 + Math.random()*0.4,
+            "255,140,40",
+            Math.random()*4+2
+          );
+        }
+      }
+
+      // Body
+      ctx.fillStyle = "#e9eef5";
+      ctx.beginPath();
+      ctx.roundRect(-18, -45, 36, 90, 12);
+      ctx.fill();
+
+      // Nose
+      ctx.fillStyle = "#ff5d5d";
+      ctx.beginPath();
+      ctx.moveTo(0, -82);
+      ctx.lineTo(-18, -42);
+      ctx.lineTo(18, -42);
+      ctx.closePath();
+      ctx.fill();
+
+      // Window
+      ctx.fillStyle = "#8fe7ff";
+      ctx.beginPath();
+      ctx.arc(0, -15, 9, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,255,255,0.8)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      // Side boosters/fins
+      ctx.fillStyle = state.stageSeparated ? "#9aa7b8" : "#cfd8e3";
+
+      // Left fin
+      ctx.beginPath();
+      ctx.moveTo(-18, 25);
+      ctx.lineTo(-36, 44);
+      ctx.lineTo(-18, 44);
+      ctx.closePath();
+      ctx.fill();
+
+      // Right fin
+      ctx.beginPath();
+      ctx.moveTo(18, 25);
+      ctx.lineTo(36, 44);
+      ctx.lineTo(18, 44);
+      ctx.closePath();
+      ctx.fill();
+
+      // Stage visual
+      if (!state.stageSeparated){
+        ctx.fillStyle = "#d5dde8";
+        ctx.fillRect(-24, -15, 6, 48);
+        ctx.fillRect(18, -15, 6, 48);
+      }
+
+      // Stripe
+      ctx.fillStyle = "#2bd1ff";
+      ctx.fillRect(-18, 8, 36, 8);
+
+      ctx.restore();
+
+      // altitude scale effect
+      if (state.altitude > 1000){
+        ctx.fillStyle = "rgba(255,255,255,0.08)";
+        for(let i=0;i<4;i++){
+          ctx.beginPath();
+          ctx.arc(x, y, 50 + i * 22 + Math.sin(state.time * 2 + i) * 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    function updateParticles(dt){
+      for(let i = particles.length - 1; i >= 0; i--){
+        const p = particles[i];
+        p.life -= dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= 0.985;
+        p.vy *= 0.985;
+        if (p.life <= 0) particles.splice(i,1);
+      }
+    }
+
+    function drawParticles(){
+      for(const p of particles){
+        const alpha = Math.max(0, p.life / p.maxLife);
+        ctx.fillStyle = `rgba(${p.color},${alpha})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * alpha, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function physics(dt){
+      state.time += dt;
+      state.shake *= 0.88;
+
+      if (!state.launched) return;
+
+      const fuelFactor = state.fuel > 0 ? 1 : 0;
+      const boostFactor = state.boostTimer > 0 ? 1.8 : 1;
+      const stageFactor = state.stageSeparated ? 1.18 : 1;
+
+      // Gravité simplifiée qui diminue légèrement avec l'altitude
+      const gravity = Math.max(4.5, 9.81 * (1 - Math.min(state.altitude / 2000, 0.35)));
+
+      // Traînée atmosphérique simplifiée
+      const dragStrength = state.altitude < 100 ? (1 - state.altitude / 100) * 0.0018 : 0.00004;
+      const drag = state.velocity * Math.abs(state.velocity) * dragStrength;
+
+      // Poussée en m/s² simplifiée
+      const thrustAccel = 34 * state.throttle * fuelFactor * boostFactor * stageFactor;
+
+      const accel = thrustAccel - gravity - drag;
+
+      state.velocity += accel * dt;
+
+      if (state.altitude <= 0 && state.velocity < 0) {
+        state.velocity = 0;
+      }
+
+      state.altitude += (state.velocity * dt) / 1000;
+      if (state.altitude < 0) state.altitude = 0;
+
+      // consommation carburant
+      if (state.fuel > 0 && state.throttle > 0){
+        state.fuel -= dt * state.throttle * (state.boostTimer > 0 ? 9 : 4.2);
+        if (state.stageSeparated) state.fuel -= dt * 0.4;
+        state.fuel = Math.max(0, state.fuel);
+      }
+
+      if (state.boostTimer > 0){
+        state.boostTimer -= dt;
+        state.shake = Math.max(state.shake, 8);
+      }
+
+      // messages d'étapes
+      if (state.altitude >= 1 && !milestones.m1.classList.contains("done")) {
+        setMessage("Décollage confirmé.");
+      } else if (state.altitude >= 20 && !milestones.m2.classList.contains("done")) {
+        setMessage("Vous traversez l'atmosphère supérieure.");
+      } else if (state.altitude >= 50 && !milestones.m3.classList.contains("done")) {
+        setMessage("Très haute altitude atteinte.");
+      } else if (state.altitude >= 100 && !milestones.m4.classList.contains("done")) {
+        setMessage("Ligne de Kármán franchie : bienvenue dans l'espace !");
+      } else if (state.altitude >= 500 && !milestones.m5.classList.contains("done")) {
+        setMessage("Altitude orbitale symbolique atteinte.");
+      } else if (state.altitude >= 1000 && !milestones.m6.classList.contains("done")) {
+        setMessage("Vous allez au-delà de l'orbite basse.");
+      } else if (state.altitude >= 10000 && !milestones.m7.classList.contains("done")) {
+        setMessage("Espace profond atteint. Mission accomplie !");
+      }
+
+      updateHUD();
+    }
+
+    let last = performance.now();
+    function loop(now){
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+
+      physics(dt);
+      updateParticles(dt);
+
+      drawBackground();
+      drawParticles();
+      drawRocket();
+
+      requestAnimationFrame(loop);
+    }
+
+    updateHUD();
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
+```>
+
+Si tu veux, je peux aussi te faire une **version encore plus spectaculaire** dans **un seul fichier `.html`** avec :
+
+- **compte à rebours avant lancement**
+- **effets sonores**
+- **caméra qui zoome**
+- **sélection de planètes**
+- **mode arcade**
+- **trajectoire vers la Lune / Mars**
+
+Je peux te générer ça directement.

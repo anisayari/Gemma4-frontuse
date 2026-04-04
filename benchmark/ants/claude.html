@@ -1,0 +1,863 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🐜 Simulation de Colonie de Fourmis</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #1a1a2e;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* ── Header ── */
+        header {
+            background: linear-gradient(135deg, #16213e, #0f3460);
+            padding: 10px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 2px solid #e94560;
+            flex-shrink: 0;
+            z-index: 10;
+        }
+
+        header h1 {
+            font-size: 1.4rem;
+            color: #e94560;
+            text-shadow: 0 0 12px rgba(233, 69, 96, .4);
+        }
+
+        header h1 span { font-size: 1.6rem; }
+
+        .header-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: #e94560;
+            color: #fff;
+            border: none;
+            padding: 8px 18px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: .85rem;
+            font-weight: 600;
+            transition: background .2s, transform .1s;
+        }
+
+        button:hover { background: #c73650; transform: scale(1.05); }
+        button:active { transform: scale(.97); }
+
+        button.secondary {
+            background: #0f3460;
+            border: 1px solid #e94560;
+        }
+
+        button.secondary:hover { background: #16213e; }
+
+        /* ── Main Layout ── */
+        .main {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* ── Sidebar ── */
+        .sidebar {
+            width: 280px;
+            background: #16213e;
+            padding: 14px;
+            overflow-y: auto;
+            border-right: 2px solid #0f3460;
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .panel {
+            background: #1a1a2e;
+            border: 1px solid #0f3460;
+            border-radius: 8px;
+            padding: 12px;
+        }
+
+        .panel h3 {
+            color: #e94560;
+            font-size: .85rem;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 3px 0;
+            font-size: .82rem;
+        }
+
+        .stat-row .val {
+            color: #53d8fb;
+            font-weight: 700;
+        }
+
+        /* Sliders */
+        .slider-group {
+            margin-bottom: 8px;
+        }
+
+        .slider-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: .78rem;
+            margin-bottom: 3px;
+            color: #aaa;
+        }
+
+        .slider-group label .sv { color: #53d8fb; font-weight: 700; }
+
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: #0f3460;
+            outline: none;
+        }
+
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: #e94560;
+            cursor: pointer;
+        }
+
+        /* Legend */
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: .78rem;
+            padding: 2px 0;
+        }
+
+        .legend-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        /* ── Canvas ── */
+        .canvas-wrap {
+            flex: 1;
+            position: relative;
+            background: #111;
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* ── Tooltip / Info overlay ── */
+        #tooltip {
+            position: absolute;
+            pointer-events: none;
+            background: rgba(22, 33, 62, .92);
+            border: 1px solid #e94560;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: .75rem;
+            display: none;
+            z-index: 20;
+            max-width: 200px;
+        }
+
+        /* ── Mode indicator ── */
+        .mode-indicator {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(233, 69, 96, .85);
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: .8rem;
+            font-weight: 700;
+            display: none;
+            z-index: 15;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .sidebar { width: 220px; }
+            header h1 { font-size: 1rem; }
+        }
+
+        @media (max-width: 580px) {
+            .main { flex-direction: column-reverse; }
+            .sidebar {
+                width: 100%;
+                max-height: 180px;
+                flex-direction: row;
+                overflow-x: auto;
+                border-right: none;
+                border-top: 2px solid #0f3460;
+            }
+            .panel { min-width: 220px; }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ═══════════ HEADER ═══════════ -->
+<header>
+    <h1><span>🐜</span> Simulation de Colonie de Fourmis</h1>
+    <div class="header-controls">
+        <button id="btnPause">⏸ Pause</button>
+        <button id="btnReset" class="secondary">🔄 Reset</button>
+        <button id="btnFood" class="secondary">🍎 Placer Nourriture</button>
+        <button id="btnObstacle" class="secondary">🧱 Placer Obstacle</button>
+        <button id="btnClear" class="secondary">🗑 Effacer objets</button>
+    </div>
+</header>
+
+<!-- ═══════════ MAIN ═══════════ -->
+<div class="main">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+
+        <!-- Stats -->
+        <div class="panel">
+            <h3>📊 Statistiques</h3>
+            <div class="stat-row"><span>Fourmis</span><span class="val" id="statAnts">0</span></div>
+            <div class="stat-row"><span>Nourriture collectée</span><span class="val" id="statFood">0</span></div>
+            <div class="stat-row"><span>Sources de nourriture</span><span class="val" id="statSources">0</span></div>
+            <div class="stat-row"><span>Phéromones actives</span><span class="val" id="statPhero">0</span></div>
+            <div class="stat-row"><span>Temps écoulé</span><span class="val" id="statTime">0s</span></div>
+            <div class="stat-row"><span>FPS</span><span class="val" id="statFPS">0</span></div>
+        </div>
+
+        <!-- Paramètres -->
+        <div class="panel">
+            <h3>⚙️ Paramètres</h3>
+
+            <div class="slider-group">
+                <label>Nombre de fourmis <span class="sv" id="vAnts">80</span></label>
+                <input type="range" id="sAnts" min="10" max="500" value="80">
+            </div>
+
+            <div class="slider-group">
+                <label>Vitesse <span class="sv" id="vSpeed">3</span></label>
+                <input type="range" id="sSpeed" min="1" max="10" value="3">
+            </div>
+
+            <div class="slider-group">
+                <label>Évaporation phéromones <span class="sv" id="vEvap">0.98</span></label>
+                <input type="range" id="sEvap" min="90" max="100" value="98">
+            </div>
+
+            <div class="slider-group">
+                <label>Force phéromones <span class="sv" id="vStrength">200</span></label>
+                <input type="range" id="sStrength" min="50" max="500" value="200">
+            </div>
+
+            <div class="slider-group">
+                <label>Rayon de détection <span class="sv" id="vSense">50</span></label>
+                <input type="range" id="sSense" min="10" max="120" value="50">
+            </div>
+
+            <div class="slider-group">
+                <label>Aléatoire direction <span class="sv" id="vWander">0.3</span></label>
+                <input type="range" id="sWander" min="5" max="80" value="30">
+            </div>
+        </div>
+
+        <!-- Légende -->
+        <div class="panel">
+            <h3>🎨 Légende</h3>
+            <div class="legend-item"><div class="legend-dot" style="background:#8B4513;"></div> Nid (colonie)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#ff6b6b;"></div> Fourmi (cherche)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#51cf66;"></div> Fourmi (porte nourriture)</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#00b894;"></div> Phéromone → nourriture</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#6c5ce7;"></div> Phéromone → nid</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#fdcb6e;"></div> Source de nourriture</div>
+            <div class="legend-item"><div class="legend-dot" style="background:#636e72;"></div> Obstacle</div>
+        </div>
+
+    </aside>
+
+    <!-- Canvas -->
+    <div class="canvas-wrap">
+        <canvas id="canvas"></canvas>
+        <div id="tooltip"></div>
+        <div class="mode-indicator" id="modeIndicator"></div>
+    </div>
+
+</div>
+
+<!-- ═══════════ SCRIPT ═══════════ -->
+<script>
+// ─── Globals ───
+const canvas  = document.getElementById('canvas');
+const ctx     = canvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+const modeInd = document.getElementById('modeIndicator');
+
+let W, H;
+let paused = false;
+let placementMode = null; // 'food' | 'obstacle' | null
+let startTime = Date.now();
+let foodCollected = 0;
+let frameCount = 0;
+let fps = 0;
+let lastFpsTime = Date.now();
+
+// ─── Config (reactive) ───
+const cfg = {
+    antCount:       80,
+    speed:          3,
+    evaporation:    0.98,
+    pheromoneStr:   200,
+    senseRadius:    50,
+    wanderStrength: 0.3,
+};
+
+// ─── Pheromone grid ───
+const CELL = 8;
+let gridW, gridH;
+let pheroFood = [];   // pheromone toward food (green)
+let pheroHome = [];   // pheromone toward nest (purple)
+
+function initGrid() {
+    gridW = Math.ceil(W / CELL);
+    gridH = Math.ceil(H / CELL);
+    pheroFood = new Float32Array(gridW * gridH);
+    pheroHome = new Float32Array(gridW * gridH);
+}
+
+function gIdx(gx, gy) { return gy * gridW + gx; }
+function toGrid(x, y) { return [Math.floor(x / CELL), Math.floor(y / CELL)]; }
+
+// ─── Nest ───
+let nest = { x: 0, y: 0, radius: 30 };
+
+// ─── Food sources ───
+let foods = [];
+
+function addFood(x, y, amount) {
+    foods.push({ x, y, radius: 18 + Math.random() * 10, amount: amount || 150 + Math.random() * 200 });
+}
+
+// ─── Obstacles ───
+let obstacles = [];
+
+function addObstacle(x, y) {
+    obstacles.push({ x, y, w: 30 + Math.random() * 60, h: 30 + Math.random() * 60 });
+}
+
+function isInObstacle(x, y) {
+    for (const o of obstacles) {
+        if (x >= o.x - o.w / 2 && x <= o.x + o.w / 2 && y >= o.y - o.h / 2 && y <= o.y + o.h / 2) return true;
+    }
+    return false;
+}
+
+// ─── Ant class ───
+class Ant {
+    constructor() {
+        this.x = nest.x + (Math.random() - .5) * 20;
+        this.y = nest.y + (Math.random() - .5) * 20;
+        this.angle = Math.random() * Math.PI * 2;
+        this.hasFood = false;
+        this.life = 1;
+    }
+
+    sense(pheroGrid, angleOffset) {
+        const r = cfg.senseRadius;
+        const a = this.angle + angleOffset;
+        const sx = this.x + Math.cos(a) * r;
+        const sy = this.y + Math.sin(a) * r;
+        const [gx, gy] = toGrid(sx, sy);
+        if (gx < 0 || gx >= gridW || gy < 0 || gy >= gridH) return 0;
+        return pheroGrid[gIdx(gx, gy)];
+    }
+
+    update() {
+        const spd = cfg.speed;
+
+        // Choose pheromone to follow
+        const grid = this.hasFood ? pheroHome : pheroFood;
+
+        const fwd   = this.sense(grid, 0);
+        const left  = this.sense(grid, -0.5);
+        const right = this.sense(grid, 0.5);
+
+        // Steer toward strongest pheromone
+        if (fwd > left && fwd > right) {
+            // keep going
+        } else if (left > right) {
+            this.angle -= 0.3;
+        } else if (right > left) {
+            this.angle += 0.3;
+        }
+
+        // Wander
+        this.angle += (Math.random() - .5) * cfg.wanderStrength;
+
+        // Move
+        let nx = this.x + Math.cos(this.angle) * spd;
+        let ny = this.y + Math.sin(this.angle) * spd;
+
+        // Bounce off walls
+        if (nx < 2 || nx > W - 2) { this.angle = Math.PI - this.angle; nx = Math.max(2, Math.min(W - 2, nx)); }
+        if (ny < 2 || ny > H - 2) { this.angle = -this.angle; ny = Math.max(2, Math.min(H - 2, ny)); }
+
+        // Avoid obstacles
+        if (isInObstacle(nx, ny)) {
+            this.angle += Math.PI * 0.5 + (Math.random() - .5);
+            nx = this.x;
+            ny = this.y;
+        }
+
+        this.x = nx;
+        this.y = ny;
+
+        // Drop pheromone
+        const [gx, gy] = toGrid(this.x, this.y);
+        if (gx >= 0 && gx < gridW && gy >= 0 && gy < gridH) {
+            const idx = gIdx(gx, gy);
+            if (this.hasFood) {
+                pheroFood[idx] = Math.min(pheroFood[idx] + cfg.pheromoneStr * 0.02, cfg.pheromoneStr);
+            } else {
+                pheroHome[idx] = Math.min(pheroHome[idx] + cfg.pheromoneStr * 0.02, cfg.pheromoneStr);
+            }
+        }
+
+        // Check food pickup
+        if (!this.hasFood) {
+            for (let i = foods.length - 1; i >= 0; i--) {
+                const f = foods[i];
+                const d = Math.hypot(this.x - f.x, this.y - f.y);
+                if (d < f.radius + 4) {
+                    this.hasFood = true;
+                    this.angle += Math.PI; // turn around
+                    f.amount -= 1;
+                    if (f.amount <= 0) foods.splice(i, 1);
+                    break;
+                }
+            }
+        }
+
+        // Check nest delivery
+        if (this.hasFood) {
+            const d = Math.hypot(this.x - nest.x, this.y - nest.y);
+            if (d < nest.radius + 4) {
+                this.hasFood = false;
+                this.angle += Math.PI;
+                foodCollected++;
+            }
+        }
+    }
+}
+
+let ants = [];
+
+// ─── Init ───
+function resize() {
+    const wrap = canvas.parentElement;
+    W = canvas.width = wrap.clientWidth;
+    H = canvas.height = wrap.clientHeight;
+    initGrid();
+}
+
+function initSimulation() {
+    resize();
+    nest.x = W / 2;
+    nest.y = H / 2;
+    foods = [];
+    obstacles = [];
+    foodCollected = 0;
+    startTime = Date.now();
+
+    // Place initial food sources
+    const margin = 80;
+    for (let i = 0; i < 5; i++) {
+        addFood(
+            margin + Math.random() * (W - margin * 2),
+            margin + Math.random() * (H - margin * 2)
+        );
+    }
+
+    // Create ants
+    ants = [];
+    for (let i = 0; i < cfg.antCount; i++) ants.push(new Ant());
+}
+
+// ─── Evaporate pheromones ───
+function evaporate() {
+    const e = cfg.evaporation;
+    for (let i = 0, len = gridW * gridH; i < len; i++) {
+        pheroFood[i] *= e;
+        pheroHome[i] *= e;
+        if (pheroFood[i] < 0.05) pheroFood[i] = 0;
+        if (pheroHome[i] < 0.05) pheroHome[i] = 0;
+    }
+}
+
+// ─── Drawing ───
+function drawPheromones() {
+    const imgData = ctx.getImageData(0, 0, W, H);
+    const data = imgData.data;
+
+    for (let gy = 0; gy < gridH; gy++) {
+        for (let gx = 0; gx < gridW; gx++) {
+            const idx = gIdx(gx, gy);
+            const fv = pheroFood[idx];
+            const hv = pheroHome[idx];
+            if (fv < 1 && hv < 1) continue;
+
+            const px = gx * CELL;
+            const py = gy * CELL;
+
+            for (let dy = 0; dy < CELL && py + dy < H; dy++) {
+                for (let dx = 0; dx < CELL && px + dx < W; dx++) {
+                    const pi = ((py + dy) * W + (px + dx)) * 4;
+                    // Green for food pheromone
+                    if (fv > 1) {
+                        const a = Math.min(fv / cfg.pheromoneStr, 1) * 0.6;
+                        data[pi]     = Math.min(255, data[pi]     + 0   * a * 255 | 0);
+                        data[pi + 1] = Math.min(255, data[pi + 1] + 184 * a | 0);
+                        data[pi + 2] = Math.min(255, data[pi + 2] + 148 * a | 0);
+                    }
+                    // Purple for home pheromone
+                    if (hv > 1) {
+                        const a = Math.min(hv / cfg.pheromoneStr, 1) * 0.45;
+                        data[pi]     = Math.min(255, data[pi]     + 108 * a | 0);
+                        data[pi + 1] = Math.min(255, data[pi + 1] + 92  * a | 0);
+                        data[pi + 2] = Math.min(255, data[pi + 2] + 231 * a | 0);
+                    }
+                }
+            }
+        }
+    }
+    ctx.putImageData(imgData, 0, 0);
+}
+
+function drawNest() {
+    // Glow
+    const grad = ctx.createRadialGradient(nest.x, nest.y, 5, nest.x, nest.y, nest.radius * 2);
+    grad.addColorStop(0, 'rgba(139,69,19,0.4)');
+    grad.addColorStop(1, 'rgba(139,69,19,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(nest.x, nest.y, nest.radius * 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Nest body
+    ctx.fillStyle = '#8B4513';
+    ctx.beginPath();
+    ctx.arc(nest.x, nest.y, nest.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#a0522d';
+    ctx.beginPath();
+    ctx.arc(nest.x, nest.y, nest.radius * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Label
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 11px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('🏠 Nid', nest.x, nest.y + nest.radius + 16);
+}
+
+function drawFoods() {
+    for (const f of foods) {
+        // Glow
+        const grad = ctx.createRadialGradient(f.x, f.y, 2, f.x, f.y, f.radius * 1.8);
+        grad.addColorStop(0, 'rgba(253,203,110,0.5)');
+        grad.addColorStop(1, 'rgba(253,203,110,0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.radius * 1.8, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Body
+        ctx.fillStyle = '#fdcb6e';
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.radius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = '#f39c12';
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.radius * 0.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Amount
+        ctx.fillStyle = '#fff';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(Math.ceil(f.amount), f.x, f.y + 4);
+    }
+}
+
+function drawObstacles() {
+    ctx.fillStyle = '#636e72';
+    ctx.strokeStyle = '#2d3436';
+    ctx.lineWidth = 2;
+    for (const o of obstacles) {
+        const rx = o.x - o.w / 2, ry = o.y - o.h / 2;
+        ctx.fillRect(rx, ry, o.w, o.h);
+        ctx.strokeRect(rx, ry, o.w, o.h);
+    }
+}
+
+function drawAnts() {
+    for (const ant of ants) {
+        const sz = 3;
+        ctx.save();
+        ctx.translate(ant.x, ant.y);
+        ctx.rotate(ant.angle);
+
+        // Body
+        ctx.fillStyle = ant.hasFood ? '#51cf66' : '#ff6b6b';
+        ctx.beginPath();
+        // Abdomen
+        ctx.ellipse(-3, 0, 3, 2, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Head
+        ctx.beginPath();
+        ctx.ellipse(3, 0, 2, 1.5, 0, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Antennae
+        ctx.strokeStyle = ant.hasFood ? '#51cf66' : '#ff6b6b';
+        ctx.lineWidth = 0.8;
+        ctx.beginPath();
+        ctx.moveTo(4, 0);
+        ctx.lineTo(7, -3);
+        ctx.moveTo(4, 0);
+        ctx.lineTo(7, 3);
+        ctx.stroke();
+
+        // Food indicator
+        if (ant.hasFood) {
+            ctx.fillStyle = '#fdcb6e';
+            ctx.beginPath();
+            ctx.arc(-5, 0, 1.5, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        ctx.restore();
+    }
+}
+
+// ─── Main Loop ───
+function loop() {
+    requestAnimationFrame(loop);
+
+    // FPS
+    frameCount++;
+    const now = Date.now();
+    if (now - lastFpsTime >= 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        lastFpsTime = now;
+    }
+
+    if (paused) return;
+
+    // Update
+    for (const ant of ants) ant.update();
+    evaporate();
+
+    // Adjust ant count dynamically
+    while (ants.length < cfg.antCount) ants.push(new Ant());
+    while (ants.length > cfg.antCount) ants.pop();
+
+    // Draw
+    ctx.fillStyle = 'rgba(17,17,17,1)';
+    ctx.fillRect(0, 0, W, H);
+
+    // Subtle ground texture
+    ctx.fillStyle = 'rgba(30,30,30,1)';
+    ctx.fillRect(0, 0, W, H);
+
+    drawPheromones();
+    drawObstacles();
+    drawFoods();
+    drawNest();
+    drawAnts();
+
+    // Update stats
+    updateStats();
+}
+
+function updateStats() {
+    document.getElementById('statAnts').textContent = ants.length;
+    document.getElementById('statFood').textContent = foodCollected;
+    document.getElementById('statSources').textContent = foods.length;
+
+    let pheroCount = 0;
+    for (let i = 0, len = gridW * gridH; i < len; i++) {
+        if (pheroFood[i] > 1 || pheroHome[i] > 1) pheroCount++;
+    }
+    document.getElementById('statPhero').textContent = pheroCount;
+
+    const elapsed = ((Date.now() - startTime) / 1000) | 0;
+    const min = (elapsed / 60) | 0;
+    const sec = elapsed % 60;
+    document.getElementById('statTime').textContent = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+    document.getElementById('statFPS').textContent = fps;
+}
+
+// ─── Controls ───
+document.getElementById('btnPause').addEventListener('click', () => {
+    paused = !paused;
+    document.getElementById('btnPause').textContent = paused ? '▶ Reprendre' : '⏸ Pause';
+});
+
+document.getElementById('btnReset').addEventListener('click', () => {
+    initSimulation();
+});
+
+document.getElementById('btnFood').addEventListener('click', () => {
+    placementMode = placementMode === 'food' ? null : 'food';
+    updateModeIndicator();
+});
+
+document.getElementById('btnObstacle').addEventListener('click', () => {
+    placementMode = placementMode === 'obstacle' ? null : 'obstacle';
+    updateModeIndicator();
+});
+
+document.getElementById('btnClear').addEventListener('click', () => {
+    foods = [];
+    obstacles = [];
+    // Add a few food sources back
+    const margin = 80;
+    for (let i = 0; i < 3; i++) {
+        addFood(margin + Math.random() * (W - margin * 2), margin + Math.random() * (H - margin * 2));
+    }
+});
+
+function updateModeIndicator() {
+    if (placementMode === 'food') {
+        modeInd.textContent = '🍎 Cliquez pour placer de la nourriture';
+        modeInd.style.display = 'block';
+    } else if (placementMode === 'obstacle') {
+        modeInd.textContent = '🧱 Cliquez pour placer un obstacle';
+        modeInd.style.display = 'block';
+    } else {
+        modeInd.style.display = 'none';
+    }
+}
+
+// Canvas click
+canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = (e.clientX - rect.left) * (W / rect.width);
+    const y = (e.clientY - rect.top) * (H / rect.height);
+
+    if (placementMode === 'food') {
+        addFood(x, y, 200);
+    } else if (placementMode === 'obstacle') {
+        addObstacle(x, y);
+    }
+});
+
+// Canvas hover tooltip
+canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) * (W / rect.width);
+    const my = (e.clientY - rect.top) * (H / rect.height);
+
+    // Check nest
+    if (Math.hypot(mx - nest.x, my - nest.y) < nest.radius) {
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.clientX - canvas.parentElement.getBoundingClientRect().left + 12) + 'px';
+        tooltip.style.top = (e.clientY - canvas.parentElement.getBoundingClientRect().top - 10) + 'px';
+        tooltip.innerHTML = `<b>🏠 Nid</b><br>Nourriture: ${foodCollected}<br>Fourmis: ${ants.length}`;
+        return;
+    }
+
+    // Check food
+    for (const f of foods) {
+        if (Math.hypot(mx - f.x, my - f.y) < f.radius) {
+            tooltip.style.display = 'block';
+            tooltip.style.left = (e.clientX - canvas.parentElement.getBoundingClientRect().left + 12) + 'px';
+            tooltip.style.top = (e.clientY - canvas.parentElement.getBoundingClientRect().top - 10) + 'px';
+            tooltip.innerHTML = `<b>🍎 Nourriture</b><br>Restant: ${Math.ceil(f.amount)}`;
+            return;
+        }
+    }
+
+    tooltip.style.display = 'none';
+});
+
+canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+// Sliders
+function bindSlider(id, cfgKey, transform, display) {
+    const el = document.getElementById(id);
+    el.addEventListener('input', () => {
+        const v = transform ? transform(+el.value) : +el.value;
+        cfg[cfgKey] = v;
+        document.getElementById('v' + id.charAt(1).toUpperCase() + id.slice(2)).textContent = display ? display(v) : v;
+    });
+}
+
+bindSlider('sAnts', 'antCount');
+bindSlider('sSpeed', 'speed');
+bindSlider('sEvap', 'evaporation', v => v / 100, v => v.toFixed(2));
+bindSlider('sStrength', 'pheromoneStr');
+bindSlider('sSense', 'senseRadius');
+bindSlider('sWander', 'wanderStrength', v => v / 100, v => v.toFixed(2));
+
+// Resize
+window.addEventListener('resize', () => {
+    const oldW = W, oldH = H;
+    resize();
+    // Reposition nest to center
+    nest.x = W / 2;
+    nest.y = H / 2;
+    // Scale food & obstacle positions
+    for (const f of foods) {
+        f.x *= W / oldW;
+        f.y *= H / oldH;
+    }
+    for (const o of obstacles) {
+        o.x *= W / oldW;
+        o.y *= H / oldH;
+    }
+});
+
+// ─── Start ───
+initSimulation();
+loop();
+</script>
+
+</body>
+</html>
