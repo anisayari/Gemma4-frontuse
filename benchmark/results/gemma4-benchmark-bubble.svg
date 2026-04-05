@@ -109,6 +109,10 @@
     <circle cx="860.0" cy="436.6" r="11" class="bubble4"/>
     <text x="708" y="432" class="label">31B Q4_0</text>
     <text x="708" y="450" class="tick">30.70B · 66.12 tok/s</text>
+
+    <circle cx="860.0" cy="545.4" r="11" class="bubble4"/>
+    <text x="684" y="541" class="label">31B NVFP4</text>
+    <text x="684" y="559" class="tick">30.70B · 7.80 tok/s</text>
   </g>
 
   <g transform="translate(995,188)">

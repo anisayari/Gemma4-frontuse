@@ -6,6 +6,7 @@ Local Gemma 4 workstation lab with:
 - React frontend
 - local TTS
 - model / quantization switching
+- experimental WSL `vLLM` bridge for `nvidia/Gemma-4-31B-IT-NVFP4`
 - benchmark scripts and benchmark reports
 
 ## Benchmark setup
@@ -15,10 +16,11 @@ Local Gemma 4 workstation lab with:
 - CPU: `AMD Ryzen 9 9950X3D`
 - Date: `2026-04-04`
 
-Two benchmark paths were measured:
+Three benchmark paths were measured:
 
 1. `BF16` with the local `Transformers` runtime used by the app backend
 2. quantized `GGUF` models with `llama.cpp` CUDA
+3. `NVFP4 / ModelOpt FP4` with `vLLM` on `WSL Ubuntu`
 
 Important note:
 
@@ -54,9 +56,9 @@ xychart-beta
 ```mermaid
 xychart-beta
     title "Gemma 4 Quantized Generation Throughput on RTX 5090"
-    x-axis ["E2B Q8", "E2B Q4", "E4B Q8", "E4B Q4", "26B Q8", "26B Q4", "31B Q4"]
+    x-axis ["E2B Q8", "E2B Q4", "E4B Q8", "E4B Q4", "26B Q8", "26B Q4", "31B Q4", "31B NVFP4"]
     y-axis "tokens / second" 0 --> 300
-    bar [243.41, 285.29, 154.83, 191.27, 166.75, 184.50, 66.12]
+    bar [243.41, 285.29, 154.83, 191.27, 166.75, 184.50, 66.12, 7.80]
 ```
 
 ## BF16 benchmark
@@ -104,17 +106,42 @@ Quantized failure notes:
 
 - `Gemma 4 31B Q8_0`: CUDA load failure on this RTX 5090 setup with the tested `llama.cpp` build
 
+## NVIDIA NVFP4 benchmark
+
+Runtime:
+
+- `vLLM 0.19.0` on `WSL Ubuntu`
+- `nvidia/Gemma-4-31B-IT-NVFP4`
+- `VLLM_NVFP4_GEMM_BACKEND=cutlass`
+- guarded from Windows with timeout, GPU polling, and WSL cleanup
+- benchmark config: `max_model_len=256`, `gpu_memory_utilization=0.94`, `max_tokens=64`, `enforce_eager=True`, `cpu_offload_gb=0.0`
+
+| Model | Quant | Runtime | Status | Gen tok/s | Load time | Notes |
+| --- | --- | --- | --- | ---: | ---: | --- |
+| Gemma 4 31B IT NVFP4 | NVFP4 | WSL vLLM | ok | 7.80 | 322.00 s | validated on RTX 5090 single-GPU setup |
+
+NVFP4 notes:
+
+- the official NVIDIA model card targets `vLLM`, `NVIDIA Blackwell`, and preferred OS `Linux`
+- on this machine, the model now runs through a local `WSL` bridge in the lab
+- the lab runtime defaults to `max_model_len=512` so text and image turns fit cleanly
+- the throughput benchmark stays at `256` context because that was the most stable high-pressure config for measuring decode speed
+
 ## Quick takeaways
 
 - Fastest small model: `Gemma 4 E2B Q4_0` at `285.29 tok/s`
 - Best balanced small model: `Gemma 4 E4B Q4_0` at `191.27 tok/s`
 - Biggest model that ran cleanly in quantized mode: `Gemma 4 31B Q4_0` at `66.12 tok/s`
 - Best large-model compromise on this machine: `Gemma 4 26B A4B Q4_0` at `184.50 tok/s`
+- NVIDIA path validated: `Gemma 4 31B IT NVFP4` now runs in the lab through `WSL vLLM` at `7.80 tok/s`
+- On this single RTX 5090 setup, `31B Q4_0` remains much faster than `31B NVFP4`; the NVIDIA checkpoint is more about compatibility with the official ModelOpt/vLLM stack than raw local throughput here
 
 ## Files
 
 - BF16 summary: `benchmark/results/gemma4-5090-summary-20260404.md`
 - GGUF summary: `benchmark/results/gemma4-gguf-benchmark-20260404-202529.md`
+- NVFP4 summary: `benchmark/results/gemma4-nvfp4-vllm-summary-latest.md`
+- NVFP4 dated summary: `benchmark/results/gemma4-nvfp4-vllm-summary-20260405.md`
 - BF16 raw JSON:
   - `benchmark/results/gemma4-5090-benchmark-20260404-194128.json`
   - `benchmark/results/gemma4-5090-benchmark-20260404-194004.json`
@@ -122,6 +149,8 @@ Quantized failure notes:
   - `benchmark/results/gemma4-5090-benchmark-20260404-194036.json`
 - GGUF raw JSON:
   - `benchmark/results/gemma4-gguf-benchmark-20260404-202529.json`
+- NVFP4 raw JSON:
+  - `benchmark/results/gemma4-nvfp4-vllm-benchmark-latest.json`
 
 ## Re-run
 
@@ -135,4 +164,10 @@ GGUF:
 
 ```powershell
 .\.venv\Scripts\python.exe .\benchmark\benchmark_gemma4_gguf.py
+```
+
+NVFP4:
+
+```powershell
+.\.venv\Scripts\python.exe .\benchmark\benchmark_nvfp4_vllm_guarded.py --max-model-len 256 --gpu-memory-utilization 0.94 --max-tokens 64
 ```

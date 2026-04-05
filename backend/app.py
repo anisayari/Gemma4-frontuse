@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import ctypes
 import gc
 import io
@@ -9,13 +10,19 @@ import math
 import os
 import platform
 import re
+import shlex
+import subprocess
 import threading
 import time
 import uuid
+import urllib.error
+import urllib.request
 import wave
+import socket
+from queue import Queue
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import numpy as np
 from piper import PiperVoice
@@ -27,10 +34,11 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
+from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, ValidationError
-from transformers import AutoModelForMultimodalLM, AutoProcessor
+from transformers import AutoModelForMultimodalLM, AutoProcessor, TextIteratorStreamer
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -38,9 +46,41 @@ DIST_DIR = BASE_DIR / "web" / "dist"
 CACHE_DIR = Path(os.getenv("HF_HOME", BASE_DIR / ".hf-cache"))
 LOG_DIR = BASE_DIR / "logs"
 LOG_PATH = LOG_DIR / "gemma4-lab.log"
+LLAMA_SERVER_LOG_PATH = LOG_DIR / "llama-server.log"
+WSL_VLLM_LOG_PATH = LOG_DIR / "vllm-wsl.log"
 TTS_DIR = BASE_DIR / "tts"
 TTS_VOICE_DIR = TTS_DIR / "voices"
 TTS_GENERATED_DIR = TTS_DIR / "generated"
+LLAMA_SERVER_BIN = BASE_DIR / "tools" / "llama.cpp" / "bin" / "llama-server.exe"
+LLAMA_SERVER_HOST = "127.0.0.1"
+LLAMA_SERVER_PORT = 8011
+LLAMA_SERVER_URL = f"http://{LLAMA_SERVER_HOST}:{LLAMA_SERVER_PORT}"
+WSL_VLLM_DISTRO = os.getenv("GEMMA4_VLLM_WSL_DISTRO", "Ubuntu")
+WSL_VLLM_HOST = "127.0.0.1"
+WSL_VLLM_PORT = int(os.getenv("GEMMA4_VLLM_PORT", "8012"))
+WSL_VLLM_URL = f"http://{WSL_VLLM_HOST}:{WSL_VLLM_PORT}"
+WSL_VLLM_ACTIVATE = os.getenv(
+    "GEMMA4_VLLM_WSL_ACTIVATE",
+    "~/vllm-gemma4/bin/activate",
+)
+WSL_VLLM_STARTUP_TIMEOUT_SECONDS = int(
+    os.getenv("GEMMA4_VLLM_STARTUP_TIMEOUT_SECONDS", "480")
+)
+WSL_VLLM_MAX_MODEL_LEN = int(os.getenv("GEMMA4_VLLM_MAX_MODEL_LEN", "512"))
+WSL_VLLM_GPU_MEMORY_UTILIZATION = float(
+    os.getenv("GEMMA4_VLLM_GPU_MEMORY_UTILIZATION", "0.94")
+)
+WSL_VLLM_MAX_NUM_SEQS = int(os.getenv("GEMMA4_VLLM_MAX_NUM_SEQS", "1"))
+WSL_VLLM_MAX_NUM_BATCHED_TOKENS = int(
+    os.getenv("GEMMA4_VLLM_MAX_NUM_BATCHED_TOKENS", "256")
+)
+WSL_VLLM_CPU_OFFLOAD_GB = float(os.getenv("GEMMA4_VLLM_CPU_OFFLOAD_GB", "0"))
+WSL_VLLM_REQUEST_TIMEOUT_SECONDS = int(
+    os.getenv("GEMMA4_VLLM_REQUEST_TIMEOUT_SECONDS", "360")
+)
+WSL_VLLM_LOG_STALL_TIMEOUT_SECONDS = int(
+    os.getenv("GEMMA4_VLLM_LOG_STALL_TIMEOUT_SECONDS", "180")
+)
 LOCAL_FILES_ONLY = os.getenv("GEMMA4_LOCAL_ONLY", "0") == "1"
 DEFAULT_MODEL_KEY = os.getenv("GEMMA4_MODEL_KEY", "e4b")
 DEFAULT_QUANTIZATION_KEY = os.getenv("GEMMA4_QUANTIZATION_KEY", "bf16")
@@ -56,9 +96,11 @@ DOCS_NOTE = (
 )
 QUANTIZATION_NOTE = (
     "Quantization memory estimates follow the official Google Gemma 4 overview page "
-    "(updated 2026-04-02). This local backend currently runs the official Hugging Face "
-    "checkpoints in BF16 only; SFP8 and Q4_0 are shown for planning and UI comparison, "
-    "but require a different runtime or checkpoint format."
+    "(updated 2026-04-02). This local backend runs the official Hugging Face "
+    "checkpoints in BF16, routes Q4_0 through a local llama.cpp runtime, and can "
+    "route NVIDIA's NVFP4 checkpoint through WSL vLLM. SFP8 is still exposed with "
+    "Google's official memory estimate, but it requires a different runtime or "
+    "checkpoint family here."
 )
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -103,6 +145,7 @@ MODEL_SPECS = [
         "supports_image": True,
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 9.6, "sfp8": 4.6, "q4_0": 3.2},
+        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-E2B-it-GGUF"},
         "doc_summary": "Small edge model with native audio support.",
     },
     {
@@ -119,6 +162,7 @@ MODEL_SPECS = [
         "supports_image": True,
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 15.0, "sfp8": 7.5, "q4_0": 5.0},
+        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-E4B-it-GGUF"},
         "doc_summary": "Best balanced small model with native audio support.",
     },
     {
@@ -135,6 +179,7 @@ MODEL_SPECS = [
         "supports_image": True,
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 48.0, "sfp8": 25.0, "q4_0": 15.6},
+        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF"},
         "doc_summary": "Mixture-of-Experts variant tuned for faster workstation inference.",
     },
     {
@@ -152,7 +197,29 @@ MODEL_SPECS = [
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 58.3, "sfp8": 30.4, "q4_0": 17.4},
         "min_windows_commit_available_gib": 64.0,
+        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-31B-it-GGUF"},
         "doc_summary": "Largest dense Gemma 4 variant for local workstation use.",
+    },
+    {
+        "key": "31b-nvfp4",
+        "label": "Gemma 4 31B IT NVFP4",
+        "hf_model_id": "nvidia/Gemma-4-31B-IT-NVFP4",
+        "architecture": "Dense",
+        "tier": "Blackwell",
+        "context_length": "256K",
+        "parameter_summary": "30.7B dense / NVIDIA ModelOpt NVFP4",
+        "active_parameter_summary": "30.7B active",
+        "supported_modalities": ["text", "image", "video"],
+        "supports_audio": False,
+        "supports_image": True,
+        "supports_text": True,
+        "memory_requirements_gib": {"nvfp4": None},
+        "llama_cpp_hf_repo_ids": {},
+        "doc_summary": (
+            "NVIDIA-optimized NVFP4 checkpoint. Inputs are text, image, and video; output "
+            "is text. This local lab can route it through an experimental WSL vLLM path on "
+            "NVIDIA Blackwell."
+        ),
     },
 ]
 MODEL_SPECS_BY_KEY = {spec["key"]: spec for spec in MODEL_SPECS}
@@ -164,6 +231,7 @@ QUANTIZATION_SPECS = [
         "precision_bits": 16,
         "runtime_supported": True,
         "status": "available",
+        "runtime_family": "transformers",
         "doc_summary": "Default 16-bit Hugging Face path used by this local backend.",
     },
     {
@@ -172,15 +240,30 @@ QUANTIZATION_SPECS = [
         "precision_bits": 8,
         "runtime_supported": False,
         "status": "planning-only",
+        "runtime_family": "planning",
         "doc_summary": "Official Google memory estimate exposed for planning. Not loadable in this Transformers backend as-is.",
     },
     {
         "key": "q4_0",
         "label": "Q4_0",
         "precision_bits": 4,
-        "runtime_supported": False,
-        "status": "planning-only",
-        "doc_summary": "Official Google memory estimate exposed for planning. Requires a quantized runtime/checkpoint family outside this backend.",
+        "runtime_supported": True,
+        "status": "llama.cpp",
+        "runtime_family": "llama.cpp",
+        "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat.",
+    },
+    {
+        "key": "nvfp4",
+        "label": "NVFP4",
+        "precision_bits": 4,
+        "runtime_supported": True,
+        "status": "wsl-vllm",
+        "runtime_family": "vllm-wsl",
+        "doc_summary": (
+            "NVIDIA ModelOpt NVFP4 checkpoint format. The official model card targets "
+            "vLLM on NVIDIA Blackwell under Linux. This lab bridges it through a local "
+            "WSL vLLM runtime with tuned memory settings."
+        ),
     },
 ]
 QUANTIZATION_SPECS_BY_KEY = {spec["key"]: spec for spec in QUANTIZATION_SPECS}
@@ -233,6 +316,7 @@ def serialize_model_spec(spec: dict) -> dict:
         "supports_image": spec["supports_image"],
         "supports_text": spec["supports_text"],
         "memory_requirements_gib": spec["memory_requirements_gib"],
+        "llama_cpp_hf_repo_ids": spec.get("llama_cpp_hf_repo_ids", {}),
         "doc_summary": spec["doc_summary"],
     }
 
@@ -244,6 +328,7 @@ def serialize_quantization_spec(spec: dict) -> dict:
         "precision_bits": spec["precision_bits"],
         "runtime_supported": spec["runtime_supported"],
         "status": spec["status"],
+        "runtime_family": spec.get("runtime_family", "planning"),
         "doc_summary": spec["doc_summary"],
     }
 
@@ -315,18 +400,22 @@ def preflight_quantization_support(model_spec: dict, quantization_spec: dict) ->
     if quantization_spec["runtime_supported"]:
         return None
 
-    memory_estimate = model_spec["memory_requirements_gib"].get(quantization_spec["key"])
-    if memory_estimate is None:
+    if quantization_spec["key"] not in model_spec["memory_requirements_gib"]:
+        return f"{quantization_spec['label']} is not available for {model_spec['label']}."
+
+    if quantization_spec["key"] == "nvfp4":
         return (
-            f"{quantization_spec['label']} is not available for {model_spec['label']} in the "
-            "official Gemma 4 memory table."
+            f"{model_spec['label']} uses NVIDIA's NVFP4 checkpoint format, but this local "
+            "backend cannot load it here. The official model card targets vLLM with "
+            "ModelOpt on NVIDIA Blackwell under Linux."
         )
 
+    memory_estimate = model_spec["memory_requirements_gib"].get(quantization_spec["key"])
     return (
         f"{model_spec['label']} with {quantization_spec['label']} is exposed in the UI using "
         f"Google's memory estimate ({memory_estimate:.1f} GiB), but this local backend cannot "
-        "load it yet. The current FastAPI + Hugging Face Transformers path uses the official "
-        "BF16 checkpoints. SFP8/Q4_0 need a different runtime or quantized checkpoint format."
+        "load it yet. The current app supports BF16 through Transformers and Q4_0 through "
+        "llama.cpp. This quantization still needs a different runtime or checkpoint format."
     )
 
 
@@ -347,7 +436,56 @@ def render_model_load_error(spec: dict, exc: Exception) -> str:
             "Free RAM or VRAM, or switch to a smaller Gemma 4 variant."
         )
 
+    if "no available memory for the cache blocks" in lowered:
+        return (
+            f"{spec['label']} loaded its weights, but there was not enough remaining VRAM "
+            "for the KV cache. Reduce the configured context length, free more GPU memory, "
+            "or switch to a lighter runtime path."
+        )
+
+    if "less than desired gpu memory utilization" in lowered:
+        return (
+            f"{spec['label']} could not start because the GPU already had too little free "
+            "memory for the configured vLLM reservation. Close other GPU workloads and retry."
+        )
+
     return f"{spec['label']} failed to load: {raw_message}"
+
+
+def to_wsl_path(path: Path) -> str:
+    normalized = str(path.resolve()).replace("\\", "/")
+    if len(normalized) >= 2 and normalized[1] == ":":
+        return f"/mnt/{normalized[0].lower()}{normalized[2:]}"
+    return normalized
+
+
+def read_text_tail(path: Path, *, max_chars: int = 2400) -> str:
+    if not path.exists():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[-max_chars:].strip()
+
+
+def expand_wsl_home(path: str) -> str:
+    normalized = path.strip()
+    if normalized.startswith("~/"):
+        return "${HOME}/" + normalized[2:]
+    return normalized
+
+
+def bash_double_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def pil_image_to_data_url(image: Image.Image, *, quality: int = 92) -> str:
+    buffer = io.BytesIO()
+    normalized = image.convert("RGB")
+    normalized.save(buffer, format="JPEG", quality=quality, optimize=True)
+    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
 
 
 def normalize_tts_text(text: str) -> str:
@@ -473,173 +611,922 @@ class LocalTTSService:
         }
 
 
+class LlamaCppServerRuntime:
+    def __init__(self) -> None:
+        self._process: subprocess.Popen[str] | None = None
+        self._process_lock = threading.Lock()
+        self._current_model_key: str | None = None
+        self._current_quantization_key: str | None = None
+
+    @property
+    def is_loaded(self) -> bool:
+        return (
+            self._process is not None
+            and self._process.poll() is None
+            and self._current_model_key is not None
+            and self._current_quantization_key is not None
+        )
+
+    def matches(self, model_key: str, quantization_key: str) -> bool:
+        return (
+            self.is_loaded
+            and self._current_model_key == model_key
+            and self._current_quantization_key == quantization_key
+        )
+
+    def unload(self) -> None:
+        with self._process_lock:
+            process = self._process
+            self._process = None
+            self._current_model_key = None
+            self._current_quantization_key = None
+
+        if process is None:
+            return
+
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+    def _build_command(self, spec: dict, quantization_spec: dict) -> list[str]:
+        repo_id = spec.get("llama_cpp_hf_repo_ids", {}).get(quantization_spec["key"])
+        if not repo_id:
+            raise HTTPException(
+                status_code=501,
+                detail=(
+                    f"{spec['label']} in {quantization_spec['label']} does not have a "
+                    "configured llama.cpp checkpoint in this app."
+                ),
+            )
+
+        return [
+            str(LLAMA_SERVER_BIN),
+            "--hf-repo",
+            f"{repo_id}:{quantization_spec['label']}",
+            "-ngl",
+            "999",
+            "--host",
+            LLAMA_SERVER_HOST,
+            "--port",
+            str(LLAMA_SERVER_PORT),
+            "--parallel",
+            "1",
+            "--slots",
+            "--reasoning",
+            "off",
+            "--reasoning-format",
+            "none",
+        ]
+
+    def _wait_until_ready(self, *, timeout_seconds: int = 120) -> None:
+        deadline = time.time() + timeout_seconds
+        last_error = "llama.cpp server did not become ready."
+        while time.time() < deadline:
+            with self._process_lock:
+                process = self._process
+
+            if process is None:
+                raise RuntimeError("llama.cpp server process was not started.")
+
+            if process.poll() is not None:
+                raise RuntimeError("llama.cpp server exited before becoming ready.")
+
+            try:
+                request = urllib.request.Request(f"{LLAMA_SERVER_URL}/health", method="GET")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    payload = json.load(response)
+                if response.status == 200 and payload.get("status") == "ok":
+                    return
+            except Exception as exc:  # pragma: no cover - transient readiness loop
+                last_error = str(exc)
+
+            time.sleep(1)
+
+        raise RuntimeError(last_error)
+
+    def load(
+        self,
+        spec: dict,
+        quantization_spec: dict,
+        *,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> None:
+        def emit(progress: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(progress, message)
+
+        if self.matches(spec["key"], quantization_spec["key"]):
+            emit(100, f"{spec['label']} is already loaded in {quantization_spec['label']}.")
+            return
+
+        emit(18, "Preparing llama.cpp quantized runtime...")
+        if not LLAMA_SERVER_BIN.exists():
+            raise HTTPException(
+                status_code=503,
+                detail=f"Missing llama.cpp server binary: {LLAMA_SERVER_BIN}",
+            )
+
+        emit(32, "Releasing the previous quantized runtime...")
+        self.unload()
+        command = self._build_command(spec, quantization_spec)
+        emit(48, "Launching llama.cpp server...")
+
+        with LLAMA_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                command,
+                cwd=str(BASE_DIR),
+                stdout=log_file,
+                stderr=log_file,
+                text=True,
+            )
+
+        with self._process_lock:
+            self._process = process
+            self._current_model_key = spec["key"]
+            self._current_quantization_key = quantization_spec["key"]
+
+        emit(76, "Waiting for llama.cpp to finish loading the quantized model...")
+        self._wait_until_ready()
+        emit(100, f"{spec['label']} is ready in {quantization_spec['label']}.")
+
+    def _request_json(self, path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{LLAMA_SERVER_URL}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            raise HTTPException(status_code=exc.code, detail=detail) from exc
+        except urllib.error.URLError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="The llama.cpp runtime is unavailable on localhost.",
+            ) from exc
+
+    def _build_messages(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+    ) -> list[dict]:
+        messages: list[dict] = []
+        if system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt.strip()})
+
+        for turn in history:
+            messages.append({"role": turn.role, "content": turn.content})
+
+        messages.append({"role": "user", "content": prompt})
+        return messages
+
+    def generate(
+        self,
+        *,
+        spec: dict,
+        quantization_spec: dict,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> dict:
+        started = time.perf_counter()
+        payload = {
+            "messages": self._build_messages(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+            ),
+            "stream": False,
+            "max_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        response_payload = self._request_json("/v1/chat/completions", payload)
+        choice = (response_payload.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        usage = response_payload.get("usage") or {}
+        timings = response_payload.get("timings") or {}
+        return {
+            "reply": message.get("content", ""),
+            "thought": message.get("reasoning_content"),
+            "raw_response": message.get("content", ""),
+            "parsed": {"role": "assistant", "content": message.get("content", "")},
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "generated_tokens": usage.get("completion_tokens"),
+            "active_model_key": spec["key"],
+            "active_model": serialize_model_spec(spec),
+            "active_quantization_key": quantization_spec["key"],
+            "active_quantization": serialize_quantization_spec(quantization_spec),
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+            "vram_allocated_gib": 0.0,
+            "vram_reserved_gib": 0.0,
+            "timings": timings,
+        }
+
+    def stream_generate(
+        self,
+        *,
+        spec: dict,
+        quantization_spec: dict,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        tts_enabled: bool,
+    ):
+        payload = {
+            "messages": self._build_messages(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+            ),
+            "stream": True,
+            "max_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        request = urllib.request.Request(
+            f"{LLAMA_SERVER_URL}/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        reply_chunks: list[str] = []
+        thought_chunks: list[str] = []
+        started = time.perf_counter()
+
+        try:
+            with urllib.request.urlopen(request, timeout=300) as response:
+                yield {"event": "start"}
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", "ignore").strip()
+                    if not line or not line.startswith("data: "):
+                        continue
+
+                    payload_line = line[6:].strip()
+                    if payload_line == "[DONE]":
+                        break
+
+                    event_payload = json.loads(payload_line)
+                    choice = (event_payload.get("choices") or [{}])[0]
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        text = delta["content"]
+                        reply_chunks.append(text)
+                        yield {"event": "token", "text": text}
+                    if delta.get("reasoning_content"):
+                        thought_chunks.append(delta["reasoning_content"])
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            raise HTTPException(status_code=exc.code, detail=detail) from exc
+        except urllib.error.URLError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="The llama.cpp runtime is unavailable on localhost.",
+            ) from exc
+
+        reply = "".join(reply_chunks).strip()
+        thought = "".join(thought_chunks).strip() or None
+        response_payload = {
+            "reply": reply,
+            "thought": thought,
+            "raw_response": reply,
+            "parsed": {"role": "assistant", "content": reply},
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+            "prompt_tokens": None,
+            "generated_tokens": None,
+            "active_model_key": spec["key"],
+            "active_model": serialize_model_spec(spec),
+            "active_quantization_key": quantization_spec["key"],
+            "active_quantization": serialize_quantization_spec(quantization_spec),
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+            "vram_allocated_gib": 0.0,
+            "vram_reserved_gib": 0.0,
+        }
+        if tts_enabled and reply:
+            try:
+                response_payload["tts_audio"] = tts_service.synthesize(reply)
+            except Exception:
+                logger.exception(
+                    "TTS synthesis failed after llama.cpp streaming key=%s quantization=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                )
+                response_payload["tts_audio"] = None
+                response_payload["tts_audio_error"] = "Local TTS synthesis failed."
+        yield {"event": "done", "payload": response_payload}
+
+
+class WslVllmServerRuntime:
+    def __init__(self) -> None:
+        self._process: subprocess.Popen[str] | None = None
+        self._process_lock = threading.Lock()
+        self._current_model_key: str | None = None
+        self._current_quantization_key: str | None = None
+
+    @property
+    def is_loaded(self) -> bool:
+        return (
+            self._process is not None
+            and self._process.poll() is None
+            and self._current_model_key is not None
+            and self._current_quantization_key is not None
+        )
+
+    def matches(self, model_key: str, quantization_key: str) -> bool:
+        return (
+            self.is_loaded
+            and self._current_model_key == model_key
+            and self._current_quantization_key == quantization_key
+        )
+
+    def _cleanup_wsl_processes(self) -> None:
+        cleanup_script = (
+            "pkill -f 'benchmark_nvfp4_vllm.py' >/dev/null 2>&1 || true; "
+            "pkill -f 'vllm serve nvidia/Gemma-4-31B-IT-NVFP4' >/dev/null 2>&1 || true; "
+            f"pkill -f '--port {WSL_VLLM_PORT}' >/dev/null 2>&1 || true; "
+            "pkill -f 'VLLM::EngineCore' >/dev/null 2>&1 || true"
+        )
+        try:
+            subprocess.run(
+                ["wsl", "-d", WSL_VLLM_DISTRO, "bash", "-lc", cleanup_script],
+                cwd=str(BASE_DIR),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except Exception:
+            logger.exception("WSL vLLM cleanup command failed")
+
+    def unload(self) -> None:
+        with self._process_lock:
+            process = self._process
+            self._process = None
+            self._current_model_key = None
+            self._current_quantization_key = None
+
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+
+        self._cleanup_wsl_processes()
+
+    def _build_command(self, spec: dict) -> list[str]:
+        if spec["key"] != "31b-nvfp4":
+            raise HTTPException(
+                status_code=501,
+                detail=f"{spec['label']} does not have a configured WSL vLLM runtime.",
+            )
+
+        log_path_wsl = shlex.quote(to_wsl_path(WSL_VLLM_LOG_PATH))
+        model_id = shlex.quote(spec["hf_model_id"])
+        serve_command = " ".join(
+            [
+                "vllm",
+                "serve",
+                model_id,
+                "--host",
+                WSL_VLLM_HOST,
+                "--port",
+                str(WSL_VLLM_PORT),
+                "--trust-remote-code",
+                "--quantization",
+                "modelopt",
+                "--max-model-len",
+                str(WSL_VLLM_MAX_MODEL_LEN),
+                "--gpu-memory-utilization",
+                str(WSL_VLLM_GPU_MEMORY_UTILIZATION),
+                "--max-num-seqs",
+                str(WSL_VLLM_MAX_NUM_SEQS),
+                "--max-num-batched-tokens",
+                str(WSL_VLLM_MAX_NUM_BATCHED_TOKENS),
+                "--cpu-offload-gb",
+                str(WSL_VLLM_CPU_OFFLOAD_GB),
+                "--uvicorn-log-level",
+                "warning",
+                "--enforce-eager",
+            ]
+        )
+        bash_command = (
+            "set -euo pipefail; "
+            f"source {bash_double_quote(expand_wsl_home(WSL_VLLM_ACTIVATE))}; "
+            "export VLLM_NVFP4_GEMM_BACKEND=cutlass; "
+            "export VLLM_WORKER_MULTIPROC_METHOD=spawn; "
+            f"{serve_command} >> {log_path_wsl} 2>&1"
+        )
+        return ["wsl", "-d", WSL_VLLM_DISTRO, "bash", "-lc", bash_command]
+
+    def _wait_until_ready(
+        self,
+        *,
+        timeout_seconds: int = WSL_VLLM_STARTUP_TIMEOUT_SECONDS,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> None:
+        deadline = time.time() + timeout_seconds
+        started = time.time()
+        last_error = "WSL vLLM server did not become ready."
+        last_log_mtime = (
+            WSL_VLLM_LOG_PATH.stat().st_mtime if WSL_VLLM_LOG_PATH.exists() else None
+        )
+        last_log_progress_at = time.time()
+
+        while time.time() < deadline:
+            with self._process_lock:
+                process = self._process
+
+            if process is None:
+                raise RuntimeError("WSL vLLM process was not started.")
+
+            if process.poll() is not None:
+                log_tail = read_text_tail(WSL_VLLM_LOG_PATH)
+                raise RuntimeError(log_tail or "WSL vLLM exited before becoming ready.")
+
+            if WSL_VLLM_LOG_PATH.exists():
+                try:
+                    current_log_mtime = WSL_VLLM_LOG_PATH.stat().st_mtime
+                except OSError:
+                    current_log_mtime = last_log_mtime
+                if current_log_mtime != last_log_mtime:
+                    last_log_mtime = current_log_mtime
+                    last_log_progress_at = time.time()
+
+            elapsed = time.time() - started
+            if progress_callback is not None:
+                if elapsed < 45:
+                    progress_callback(58, "Booting the WSL vLLM runtime...")
+                elif elapsed < 150:
+                    progress_callback(72, "Loading NVFP4 weights and warming kernels...")
+                else:
+                    progress_callback(88, "Finalizing KV cache and chat server startup...")
+
+            if (time.time() - last_log_progress_at) > WSL_VLLM_LOG_STALL_TIMEOUT_SECONDS:
+                log_tail = read_text_tail(WSL_VLLM_LOG_PATH)
+                raise RuntimeError(
+                    log_tail
+                    or (
+                        "The WSL vLLM startup log stopped changing for too long. "
+                        "The runtime was treated as stalled and will be reset."
+                    )
+                )
+
+            try:
+                request = urllib.request.Request(f"{WSL_VLLM_URL}/health", method="GET")
+                with urllib.request.urlopen(request, timeout=5) as response:
+                    response.read()
+                if response.status == 200:
+                    return
+            except Exception as exc:  # pragma: no cover - transient readiness loop
+                last_error = str(exc)
+
+            time.sleep(2)
+
+        log_tail = read_text_tail(WSL_VLLM_LOG_PATH)
+        raise RuntimeError(log_tail or last_error)
+
+    def load(
+        self,
+        spec: dict,
+        quantization_spec: dict,
+        *,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> None:
+        def emit(progress: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(progress, message)
+
+        if self.matches(spec["key"], quantization_spec["key"]):
+            emit(100, f"{spec['label']} is already loaded in {quantization_spec['label']}.")
+            return
+
+        emit(12, "Preparing the WSL vLLM runtime...")
+        self.unload()
+        emit(24, "Cleaning stale WSL vLLM processes...")
+        self._cleanup_wsl_processes()
+        command = self._build_command(spec)
+        emit(36, "Launching the NVIDIA NVFP4 server inside WSL...")
+
+        with WSL_VLLM_LOG_PATH.open("a", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                command,
+                cwd=str(BASE_DIR),
+                stdout=log_file,
+                stderr=log_file,
+                text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+
+        with self._process_lock:
+            self._process = process
+            self._current_model_key = spec["key"]
+            self._current_quantization_key = quantization_spec["key"]
+
+        self._wait_until_ready(progress_callback=emit)
+        emit(100, f"{spec['label']} is ready in {quantization_spec['label']}.")
+
+    def _request_json(self, path: str, payload: dict) -> dict:
+        request = urllib.request.Request(
+            f"{WSL_VLLM_URL}{path}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=WSL_VLLM_REQUEST_TIMEOUT_SECONDS
+            ) as response:
+                return json.load(response)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            raise HTTPException(status_code=exc.code, detail=detail) from exc
+        except TimeoutError as exc:
+            self.unload()
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "The WSL vLLM runtime timed out while generating a reply and was "
+                    "reset to avoid leaving a stuck GPU process behind."
+                ),
+            ) from exc
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, socket.timeout) or "timed out" in str(
+                exc.reason
+            ).lower():
+                self.unload()
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "The WSL vLLM runtime timed out while generating a reply and was "
+                        "reset to avoid leaving a stuck GPU process behind."
+                    ),
+                ) from exc
+            raise HTTPException(
+                status_code=503,
+                detail="The WSL vLLM runtime is unavailable on localhost.",
+            ) from exc
+
+    def _build_messages(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        image: Image.Image | None,
+    ) -> list[dict]:
+        messages: list[dict] = []
+        if system_prompt.strip():
+            messages.append({"role": "system", "content": system_prompt.strip()})
+
+        for turn in history:
+            messages.append({"role": turn.role, "content": turn.content})
+
+        if image is None:
+            messages.append({"role": "user", "content": prompt})
+            return messages
+
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": pil_image_to_data_url(image)},
+                    },
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        )
+        return messages
+
+    def generate(
+        self,
+        *,
+        spec: dict,
+        quantization_spec: dict,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        image: Image.Image | None,
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> dict:
+        started = time.perf_counter()
+        payload = {
+            "messages": self._build_messages(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+                image=image,
+            ),
+            "stream": False,
+            "max_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        response_payload = self._request_json("/v1/chat/completions", payload)
+        choice = (response_payload.get("choices") or [{}])[0]
+        message = choice.get("message") or {}
+        usage = response_payload.get("usage") or {}
+        return {
+            "reply": message.get("content", ""),
+            "thought": message.get("reasoning_content"),
+            "raw_response": message.get("content", ""),
+            "parsed": {"role": "assistant", "content": message.get("content", "")},
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+            "prompt_tokens": usage.get("prompt_tokens"),
+            "generated_tokens": usage.get("completion_tokens"),
+            "active_model_key": spec["key"],
+            "active_model": serialize_model_spec(spec),
+            "active_quantization_key": quantization_spec["key"],
+            "active_quantization": serialize_quantization_spec(quantization_spec),
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+            "vram_allocated_gib": 0.0,
+            "vram_reserved_gib": 0.0,
+        }
+
+    def stream_generate(
+        self,
+        *,
+        spec: dict,
+        quantization_spec: dict,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        image: Image.Image | None,
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        tts_enabled: bool,
+    ):
+        payload = {
+            "messages": self._build_messages(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+                image=image,
+            ),
+            "stream": True,
+            "max_tokens": max_new_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+        request = urllib.request.Request(
+            f"{WSL_VLLM_URL}/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+
+        reply_chunks: list[str] = []
+        thought_chunks: list[str] = []
+        started = time.perf_counter()
+
+        try:
+            with urllib.request.urlopen(
+                request, timeout=WSL_VLLM_REQUEST_TIMEOUT_SECONDS
+            ) as response:
+                yield {"event": "start"}
+                for raw_line in response:
+                    line = raw_line.decode("utf-8", "ignore").strip()
+                    if not line or not line.startswith("data: "):
+                        continue
+
+                    payload_line = line[6:].strip()
+                    if payload_line == "[DONE]":
+                        break
+
+                    event_payload = json.loads(payload_line)
+                    choice = (event_payload.get("choices") or [{}])[0]
+                    delta = choice.get("delta") or {}
+                    if delta.get("content"):
+                        text = delta["content"]
+                        reply_chunks.append(text)
+                        yield {"event": "token", "text": text}
+                    if delta.get("reasoning_content"):
+                        thought_chunks.append(delta["reasoning_content"])
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            raise HTTPException(status_code=exc.code, detail=detail) from exc
+        except TimeoutError as exc:
+            self.unload()
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    "The WSL vLLM runtime timed out while streaming a reply and was "
+                    "reset to avoid leaving a stuck GPU process behind."
+                ),
+            ) from exc
+        except urllib.error.URLError as exc:
+            if isinstance(exc.reason, socket.timeout) or "timed out" in str(
+                exc.reason
+            ).lower():
+                self.unload()
+                raise HTTPException(
+                    status_code=504,
+                    detail=(
+                        "The WSL vLLM runtime timed out while streaming a reply and was "
+                        "reset to avoid leaving a stuck GPU process behind."
+                    ),
+                ) from exc
+            raise HTTPException(
+                status_code=503,
+                detail="The WSL vLLM runtime is unavailable on localhost.",
+            ) from exc
+
+        reply = "".join(reply_chunks).strip()
+        thought = "".join(thought_chunks).strip() or None
+        response_payload = {
+            "reply": reply,
+            "thought": thought,
+            "raw_response": reply,
+            "parsed": {"role": "assistant", "content": reply},
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
+            "prompt_tokens": None,
+            "generated_tokens": None,
+            "active_model_key": spec["key"],
+            "active_model": serialize_model_spec(spec),
+            "active_quantization_key": quantization_spec["key"],
+            "active_quantization": serialize_quantization_spec(quantization_spec),
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+            "vram_allocated_gib": 0.0,
+            "vram_reserved_gib": 0.0,
+        }
+        if tts_enabled and reply:
+            try:
+                response_payload["tts_audio"] = tts_service.synthesize(reply)
+            except Exception:
+                logger.exception(
+                    "TTS synthesis failed after WSL vLLM streaming key=%s quantization=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                )
+                response_payload["tts_audio"] = None
+                response_payload["tts_audio_error"] = "Local TTS synthesis failed."
+        yield {"event": "done", "payload": response_payload}
+
+
 class GemmaService:
     def __init__(self) -> None:
         self._processor = None
         self._model = None
         self._current_model_key = None
         self._current_quantization_key = None
+        self._runtime_family = None
+        self._llama_cpp_runtime = LlamaCppServerRuntime()
+        self._wsl_vllm_runtime = WslVllmServerRuntime()
         self._load_lock = threading.Lock()
+        self._load_state_lock = threading.Lock()
+        self._load_thread = None
         self._generate_lock = threading.Lock()
         self.loaded_at = None
+        self._load_state = self._make_load_state(
+            status="idle",
+            progress=0,
+            message="Select a model and click Load model.",
+            target_model_key=DEFAULT_MODEL_KEY,
+            target_quantization_key=DEFAULT_QUANTIZATION_KEY,
+            error=None,
+            started_at=None,
+            finished_at=None,
+        )
 
     @property
     def is_loaded(self) -> bool:
+        if self._runtime_family == "llama.cpp":
+            return self._llama_cpp_runtime.is_loaded
+        if self._runtime_family == "vllm-wsl":
+            return self._wsl_vllm_runtime.is_loaded
         return self._processor is not None and self._model is not None
 
+    def _make_load_state(
+        self,
+        *,
+        status: str,
+        progress: int,
+        message: str,
+        target_model_key: str | None,
+        target_quantization_key: str | None,
+        error: str | None,
+        started_at: float | None,
+        finished_at: float | None,
+    ) -> dict:
+        target_spec = (
+            serialize_model_spec(get_model_spec(target_model_key))
+            if target_model_key is not None
+            else None
+        )
+        target_quantization = (
+            serialize_quantization_spec(get_quantization_spec(target_quantization_key))
+            if target_quantization_key is not None
+            else None
+        )
+        return {
+            "status": status,
+            "is_loading": status in {"queued", "loading"},
+            "progress": max(0, min(100, int(progress))),
+            "message": message,
+            "error": error,
+            "target_model_key": target_model_key,
+            "target_model": target_spec,
+            "target_quantization_key": target_quantization_key,
+            "target_quantization": target_quantization,
+            "started_at": started_at,
+            "finished_at": finished_at,
+            "updated_at": time.time(),
+        }
+
+    def _set_load_state(self, **updates: object) -> dict:
+        with self._load_state_lock:
+            current = dict(self._load_state)
+            next_status = str(updates.get("status", current["status"]))
+            target_model_key = updates.get(
+                "target_model_key", current["target_model_key"]
+            )
+            target_quantization_key = updates.get(
+                "target_quantization_key", current["target_quantization_key"]
+            )
+            started_at = updates.get("started_at", current["started_at"])
+            finished_at = updates.get("finished_at", current["finished_at"])
+
+            if next_status in {"queued", "loading"}:
+                if started_at is None:
+                    started_at = time.time()
+                finished_at = None
+            elif next_status == "idle":
+                started_at = None
+                finished_at = None
+            elif next_status in {"loaded", "failed"} and "finished_at" not in updates:
+                finished_at = time.time()
+
+            self._load_state = self._make_load_state(
+                status=next_status,
+                progress=int(updates.get("progress", current["progress"])),
+                message=str(updates.get("message", current["message"])),
+                target_model_key=(
+                    str(target_model_key) if target_model_key is not None else None
+                ),
+                target_quantization_key=(
+                    str(target_quantization_key)
+                    if target_quantization_key is not None
+                    else None
+                ),
+                error=(
+                    str(updates["error"])
+                    if updates.get("error") is not None
+                    else None
+                ),
+                started_at=started_at,
+                finished_at=finished_at,
+            )
+            return dict(self._load_state)
+
+    def get_load_state(self) -> dict:
+        with self._load_state_lock:
+            return dict(self._load_state)
+
     def _unload_current_model(self) -> None:
+        self._llama_cpp_runtime.unload()
+        self._wsl_vllm_runtime.unload()
         self._processor = None
         self._model = None
         self._current_model_key = None
         self._current_quantization_key = None
+        self._runtime_family = None
         self.loaded_at = None
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    def ensure_loaded(
-        self, model_key: str | None, quantization_key: str | None = None
-    ) -> tuple[object, object, dict, dict]:
-        spec = get_model_spec(model_key)
-        quantization_spec = get_quantization_spec(quantization_key)
-        requested_key = spec["key"]
-        requested_quantization_key = quantization_spec["key"]
-
-        if (
-            self.is_loaded
-            and self._current_model_key == requested_key
-            and self._current_quantization_key == requested_quantization_key
-        ):
-            return self._processor, self._model, spec, quantization_spec
-
-        with self._load_lock:
-            if (
-                self.is_loaded
-                and self._current_model_key == requested_key
-                and self._current_quantization_key == requested_quantization_key
-            ):
-                return self._processor, self._model, spec, quantization_spec
-
-            quantization_error = preflight_quantization_support(spec, quantization_spec)
-            if quantization_error is not None:
-                logger.warning(
-                    "Model load blocked key=%s quantization=%s detail=%s",
-                    spec["key"],
-                    quantization_spec["key"],
-                    quantization_error,
-                )
-                raise HTTPException(status_code=501, detail=quantization_error)
-
-            preflight_error = preflight_model_load(spec)
-            if preflight_error is not None:
-                self._unload_current_model()
-                logger.warning(
-                    "Model load blocked key=%s quantization=%s hf_model_id=%s detail=%s",
-                    spec["key"],
-                    quantization_spec["key"],
-                    spec["hf_model_id"],
-                    preflight_error,
-                )
-                raise HTTPException(status_code=503, detail=preflight_error)
-
-            if self.is_loaded and (
-                self._current_model_key != requested_key
-                or self._current_quantization_key != requested_quantization_key
-            ):
-                self._unload_current_model()
-
-            try:
-                CACHE_DIR.mkdir(parents=True, exist_ok=True)
-                self._processor = AutoProcessor.from_pretrained(
-                    spec["hf_model_id"],
-                    cache_dir=str(CACHE_DIR),
-                    local_files_only=LOCAL_FILES_ONLY,
-                )
-                self._model = AutoModelForMultimodalLM.from_pretrained(
-                    spec["hf_model_id"],
-                    cache_dir=str(CACHE_DIR),
-                    local_files_only=LOCAL_FILES_ONLY,
-                    dtype=torch.bfloat16,
-                    device_map="auto",
-                )
-                self._current_model_key = requested_key
-                self._current_quantization_key = requested_quantization_key
-                self.loaded_at = time.time()
-                logger.info(
-                    "Loaded model key=%s quantization=%s hf_model_id=%s",
-                    spec["key"],
-                    quantization_spec["key"],
-                    spec["hf_model_id"],
-                )
-                return self._processor, self._model, spec, quantization_spec
-            except Exception as exc:
-                self._unload_current_model()
-                detail = render_model_load_error(spec, exc)
-                logger.exception(
-                    "Model load failed key=%s quantization=%s hf_model_id=%s detail=%s",
-                    spec["key"],
-                    quantization_spec["key"],
-                    spec["hf_model_id"],
-                    detail,
-                )
-                raise HTTPException(status_code=503, detail=detail) from exc
-
-    def health(self) -> dict:
-        active_spec = get_model_spec(self._current_model_key or DEFAULT_MODEL_KEY)
-        active_quantization = get_quantization_spec(
-            self._current_quantization_key or DEFAULT_QUANTIZATION_KEY
-        )
-        windows_commit_snapshot = get_windows_commit_snapshot()
-        gpu_total_memory_gib = get_gpu_total_memory_gib()
-        return {
-            "status": "ready",
-            "active_model_key": active_spec["key"],
-            "active_model": serialize_model_spec(active_spec),
-            "active_quantization_key": active_quantization["key"],
-            "active_quantization": serialize_quantization_spec(active_quantization),
-            "tts": tts_service.health(),
-            "loaded": self.is_loaded,
-            "local_files_only": LOCAL_FILES_ONLY,
-            "cache_dir": str(CACHE_DIR),
-            "log_path": str(LOG_PATH),
-            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
-            "cuda_available": torch.cuda.is_available(),
-            "gpu_total_memory_gib": gpu_total_memory_gib,
-            "vram_allocated_gib": round(torch.cuda.memory_allocated() / (1024**3), 2)
-            if torch.cuda.is_available() and self.is_loaded
-            else 0.0,
-            "vram_reserved_gib": round(torch.cuda.memory_reserved() / (1024**3), 2)
-            if torch.cuda.is_available() and self.is_loaded
-            else 0.0,
-            "windows_commit_available_gib": windows_commit_snapshot["available_commit_gib"]
-            if windows_commit_snapshot
-            else None,
-            "windows_commit_limit_gib": windows_commit_snapshot["commit_limit_gib"]
-            if windows_commit_snapshot
-            else None,
-            "loaded_at": self.loaded_at,
-        }
-
-    def generate(
+    def _build_messages(
         self,
         *,
-        model_key: str,
-        quantization_key: str,
         prompt: str,
         system_prompt: str,
         history: list[HistoryTurn],
         image: Image.Image | None,
         audio: np.ndarray | None,
-        max_new_tokens: int,
-        temperature: float,
-        top_p: float,
-        top_k: int,
-        thinking: bool,
-    ) -> dict:
-        processor, model, spec, quantization_spec = self.ensure_loaded(
-            model_key, quantization_key
-        )
-
+    ) -> list[dict]:
         messages: list[dict] = []
         if system_prompt.strip():
             messages.append(
@@ -664,41 +1551,44 @@ class GemmaService:
             current_content.append({"type": "audio", "audio": audio})
         current_content.append({"type": "text", "text": prompt})
         messages.append({"role": "user", "content": current_content})
+        return messages
 
-        start_time = time.perf_counter()
-        with self._generate_lock:
-            inputs = processor.apply_chat_template(
-                messages,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                add_generation_prompt=True,
-                enable_thinking=thinking,
-            ).to(model.device)
-            input_len = int(inputs["input_ids"].shape[-1])
+    def _build_generation_kwargs(
+        self,
+        *,
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+    ) -> dict:
+        generation_kwargs = {"max_new_tokens": max_new_tokens}
+        if temperature > 0:
+            generation_kwargs.update(
+                {
+                    "do_sample": True,
+                    "temperature": temperature,
+                    "top_p": top_p,
+                    "top_k": top_k,
+                }
+            )
+        else:
+            generation_kwargs["do_sample"] = False
+        return generation_kwargs
 
-            generation_kwargs = {"max_new_tokens": max_new_tokens}
-            if temperature > 0:
-                generation_kwargs.update(
-                    {
-                        "do_sample": True,
-                        "temperature": temperature,
-                        "top_p": top_p,
-                        "top_k": top_k,
-                    }
-                )
-            else:
-                generation_kwargs["do_sample"] = False
-
-            with torch.inference_mode():
-                outputs = model.generate(**inputs, **generation_kwargs)
-
-        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 1)
+    def _serialize_generation_payload(
+        self,
+        *,
+        processor: object,
+        outputs: object,
+        input_len: int,
+        spec: dict,
+        quantization_spec: dict,
+        elapsed_ms: float,
+    ) -> dict:
         generated_tokens = int(outputs[0].shape[-1] - input_len)
         raw_response = processor.decode(outputs[0][input_len:], skip_special_tokens=False)
         parsed = processor.parse_response(raw_response)
         parsed_reply = extract_reply(parsed)
-
         return {
             "reply": parsed_reply["reply"],
             "thought": parsed_reply["thought"],
@@ -719,6 +1609,749 @@ class GemmaService:
             if torch.cuda.is_available()
             else 0.0,
         }
+
+    def ensure_loaded(
+        self,
+        model_key: str | None,
+        quantization_key: str | None = None,
+        progress_callback: Callable[[int, str], None] | None = None,
+    ) -> tuple[object, object, dict, dict]:
+        spec = get_model_spec(model_key)
+        quantization_spec = get_quantization_spec(quantization_key)
+        requested_key = spec["key"]
+        requested_quantization_key = quantization_spec["key"]
+
+        def emit(progress: int, message: str) -> None:
+            if progress_callback is not None:
+                progress_callback(progress, message)
+
+        if quantization_spec.get("runtime_family") == "llama.cpp":
+            if self.is_loaded and self._runtime_family == "llama.cpp" and (
+                self._current_model_key == requested_key
+                and self._current_quantization_key == requested_quantization_key
+            ):
+                emit(
+                    100,
+                    f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+                )
+                return None, None, spec, quantization_spec
+
+            with self._load_lock:
+                if self.is_loaded and self._runtime_family == "llama.cpp" and (
+                    self._current_model_key == requested_key
+                    and self._current_quantization_key == requested_quantization_key
+                ):
+                    emit(
+                        100,
+                        f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+                    )
+                    return None, None, spec, quantization_spec
+
+                quantization_error = preflight_quantization_support(spec, quantization_spec)
+                if quantization_error is not None:
+                    logger.warning(
+                        "Model load blocked key=%s quantization=%s detail=%s",
+                        spec["key"],
+                        quantization_spec["key"],
+                        quantization_error,
+                    )
+                    raise HTTPException(status_code=501, detail=quantization_error)
+
+                if self.is_loaded and (
+                    self._current_model_key != requested_key
+                    or self._current_quantization_key != requested_quantization_key
+                    or self._runtime_family != "llama.cpp"
+                ):
+                    emit(28, "Releasing the previous model from VRAM...")
+                    self._unload_current_model()
+
+                try:
+                    self._llama_cpp_runtime.load(
+                        spec,
+                        quantization_spec,
+                        progress_callback=emit,
+                    )
+                    self._current_model_key = requested_key
+                    self._current_quantization_key = requested_quantization_key
+                    self._runtime_family = "llama.cpp"
+                    self.loaded_at = time.time()
+                    logger.info(
+                        "Loaded llama.cpp model key=%s quantization=%s hf_model_id=%s",
+                        spec["key"],
+                        quantization_spec["key"],
+                        spec["hf_model_id"],
+                    )
+                    return None, None, spec, quantization_spec
+                except HTTPException:
+                    self._unload_current_model()
+                    raise
+                except Exception as exc:
+                    self._unload_current_model()
+                    detail = render_model_load_error(spec, exc)
+                    logger.exception(
+                        "llama.cpp model load failed key=%s quantization=%s hf_model_id=%s detail=%s",
+                        spec["key"],
+                        quantization_spec["key"],
+                        spec["hf_model_id"],
+                        detail,
+                    )
+                    raise HTTPException(status_code=503, detail=detail) from exc
+
+        if quantization_spec.get("runtime_family") == "vllm-wsl":
+            if self.is_loaded and self._runtime_family == "vllm-wsl" and (
+                self._current_model_key == requested_key
+                and self._current_quantization_key == requested_quantization_key
+            ):
+                emit(
+                    100,
+                    f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+                )
+                return None, None, spec, quantization_spec
+
+            with self._load_lock:
+                if self.is_loaded and self._runtime_family == "vllm-wsl" and (
+                    self._current_model_key == requested_key
+                    and self._current_quantization_key == requested_quantization_key
+                ):
+                    emit(
+                        100,
+                        f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+                    )
+                    return None, None, spec, quantization_spec
+
+                quantization_error = preflight_quantization_support(spec, quantization_spec)
+                if quantization_error is not None:
+                    logger.warning(
+                        "Model load blocked key=%s quantization=%s detail=%s",
+                        spec["key"],
+                        quantization_spec["key"],
+                        quantization_error,
+                    )
+                    raise HTTPException(status_code=501, detail=quantization_error)
+
+                if self.is_loaded and (
+                    self._current_model_key != requested_key
+                    or self._current_quantization_key != requested_quantization_key
+                    or self._runtime_family != "vllm-wsl"
+                ):
+                    emit(22, "Releasing the previous model from VRAM...")
+                    self._unload_current_model()
+
+                try:
+                    self._wsl_vllm_runtime.load(
+                        spec,
+                        quantization_spec,
+                        progress_callback=emit,
+                    )
+                    self._current_model_key = requested_key
+                    self._current_quantization_key = requested_quantization_key
+                    self._runtime_family = "vllm-wsl"
+                    self.loaded_at = time.time()
+                    logger.info(
+                        "Loaded WSL vLLM model key=%s quantization=%s hf_model_id=%s",
+                        spec["key"],
+                        quantization_spec["key"],
+                        spec["hf_model_id"],
+                    )
+                    return None, None, spec, quantization_spec
+                except HTTPException:
+                    self._unload_current_model()
+                    raise
+                except Exception as exc:
+                    self._unload_current_model()
+                    detail = render_model_load_error(spec, exc)
+                    logger.exception(
+                        "WSL vLLM model load failed key=%s quantization=%s hf_model_id=%s detail=%s",
+                        spec["key"],
+                        quantization_spec["key"],
+                        spec["hf_model_id"],
+                        detail,
+                    )
+                    raise HTTPException(status_code=503, detail=detail) from exc
+
+        if (
+            self.is_loaded
+            and self._runtime_family == "transformers"
+            and self._current_model_key == requested_key
+            and self._current_quantization_key == requested_quantization_key
+        ):
+            emit(
+                100,
+                f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+            )
+            return self._processor, self._model, spec, quantization_spec
+
+        with self._load_lock:
+            if (
+                self.is_loaded
+                and self._runtime_family == "transformers"
+                and self._current_model_key == requested_key
+                and self._current_quantization_key == requested_quantization_key
+            ):
+                emit(
+                    100,
+                    f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+                )
+                return self._processor, self._model, spec, quantization_spec
+
+            emit(8, "Checking quantization support...")
+            quantization_error = preflight_quantization_support(spec, quantization_spec)
+            if quantization_error is not None:
+                logger.warning(
+                    "Model load blocked key=%s quantization=%s detail=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                    quantization_error,
+                )
+                raise HTTPException(status_code=501, detail=quantization_error)
+
+            emit(16, "Checking workstation memory and commit availability...")
+            preflight_error = preflight_model_load(spec)
+            if preflight_error is not None:
+                self._unload_current_model()
+                logger.warning(
+                    "Model load blocked key=%s quantization=%s hf_model_id=%s detail=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                    spec["hf_model_id"],
+                    preflight_error,
+                )
+                raise HTTPException(status_code=503, detail=preflight_error)
+
+            emit(24, "Preparing local cache and tokenizer assets...")
+            CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+            if self.is_loaded and (
+                self._current_model_key != requested_key
+                or self._current_quantization_key != requested_quantization_key
+            ):
+                emit(32, "Releasing the previous model from VRAM...")
+                self._unload_current_model()
+
+            try:
+                emit(46, "Loading processor assets from the local cache...")
+                self._processor = AutoProcessor.from_pretrained(
+                    spec["hf_model_id"],
+                    cache_dir=str(CACHE_DIR),
+                    local_files_only=LOCAL_FILES_ONLY,
+                )
+                emit(78, "Loading model weights into VRAM...")
+                self._model = AutoModelForMultimodalLM.from_pretrained(
+                    spec["hf_model_id"],
+                    cache_dir=str(CACHE_DIR),
+                    local_files_only=LOCAL_FILES_ONLY,
+                    dtype=torch.bfloat16,
+                    device_map="auto",
+                )
+                emit(94, "Finalizing the model session...")
+                self._current_model_key = requested_key
+                self._current_quantization_key = requested_quantization_key
+                self._runtime_family = "transformers"
+                self.loaded_at = time.time()
+                emit(100, f"{spec['label']} is ready in {quantization_spec['label']}.")
+                logger.info(
+                    "Loaded model key=%s quantization=%s hf_model_id=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                    spec["hf_model_id"],
+                )
+                return self._processor, self._model, spec, quantization_spec
+            except Exception as exc:
+                self._unload_current_model()
+                detail = render_model_load_error(spec, exc)
+                logger.exception(
+                    "Model load failed key=%s quantization=%s hf_model_id=%s detail=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                    spec["hf_model_id"],
+                    detail,
+                )
+                raise HTTPException(status_code=503, detail=detail) from exc
+
+    def _load_model_task(self, model_key: str, quantization_key: str) -> None:
+        spec = get_model_spec(model_key)
+        quantization_spec = get_quantization_spec(quantization_key)
+        self._set_load_state(
+            status="loading",
+            progress=4,
+            message=f"Starting {spec['label']} in {quantization_spec['label']}...",
+            target_model_key=spec["key"],
+            target_quantization_key=quantization_spec["key"],
+            error=None,
+        )
+
+        try:
+            self.ensure_loaded(
+                spec["key"],
+                quantization_spec["key"],
+                progress_callback=lambda progress, message: self._set_load_state(
+                    status="loaded" if progress >= 100 else "loading",
+                    progress=progress,
+                    message=message,
+                    target_model_key=spec["key"],
+                    target_quantization_key=quantization_spec["key"],
+                    error=None,
+                ),
+            )
+        except HTTPException as exc:
+            current_progress = self.get_load_state().get("progress", 0)
+            self._set_load_state(
+                status="failed",
+                progress=current_progress,
+                message="Model load failed.",
+                target_model_key=spec["key"],
+                target_quantization_key=quantization_spec["key"],
+                error=str(exc.detail),
+            )
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            logger.exception(
+                "Unexpected load task failure key=%s quantization=%s",
+                spec["key"],
+                quantization_spec["key"],
+            )
+            current_progress = self.get_load_state().get("progress", 0)
+            self._set_load_state(
+                status="failed",
+                progress=current_progress,
+                message="Model load failed.",
+                target_model_key=spec["key"],
+                target_quantization_key=quantization_spec["key"],
+                error=render_model_load_error(spec, exc),
+            )
+        finally:
+            with self._load_state_lock:
+                self._load_thread = None
+
+    def start_load(self, model_key: str | None, quantization_key: str | None) -> dict:
+        spec = get_model_spec(model_key)
+        quantization_spec = get_quantization_spec(quantization_key)
+
+        if (
+            self.is_loaded
+            and self._current_model_key == spec["key"]
+            and self._current_quantization_key == quantization_spec["key"]
+        ):
+            state = self._set_load_state(
+                status="loaded",
+                progress=100,
+                message=f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+                target_model_key=spec["key"],
+                target_quantization_key=quantization_spec["key"],
+                error=None,
+            )
+            return {
+                "accepted": False,
+                "message": state["message"],
+                "load_state": state,
+            }
+
+        with self._load_state_lock:
+            current = dict(self._load_state)
+            if current["is_loading"]:
+                same_target = (
+                    current["target_model_key"] == spec["key"]
+                    and current["target_quantization_key"] == quantization_spec["key"]
+                )
+                if same_target:
+                    return {
+                        "accepted": False,
+                        "message": current["message"],
+                        "load_state": current,
+                    }
+
+                active_target = current.get("target_model", {})
+                active_quantization = current.get("target_quantization", {})
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"{active_target.get('label', 'Another model')} / "
+                        f"{active_quantization.get('label', 'current quantization')} is "
+                        "already loading. Wait for it to finish before starting another load."
+                    ),
+                )
+
+            state = self._make_load_state(
+                status="queued",
+                progress=2,
+                message=f"Queued {spec['label']} in {quantization_spec['label']}.",
+                target_model_key=spec["key"],
+                target_quantization_key=quantization_spec["key"],
+                error=None,
+                started_at=time.time(),
+                finished_at=None,
+            )
+            self._load_state = state
+            self._load_thread = threading.Thread(
+                target=self._load_model_task,
+                args=(spec["key"], quantization_spec["key"]),
+                daemon=True,
+                name=f"gemma-load-{spec['key']}-{quantization_spec['key']}",
+            )
+            load_thread = self._load_thread
+
+        logger.info(
+            "Model load queued key=%s quantization=%s",
+            spec["key"],
+            quantization_spec["key"],
+        )
+        load_thread.start()
+        return {
+            "accepted": True,
+            "message": state["message"],
+            "load_state": state,
+        }
+
+    def require_loaded_selection(
+        self, model_key: str | None, quantization_key: str | None
+    ) -> tuple[object, object, dict, dict]:
+        spec = get_model_spec(model_key)
+        quantization_spec = get_quantization_spec(quantization_key)
+        load_state = self.get_load_state()
+
+        if load_state["is_loading"]:
+            target_model = load_state.get("target_model")
+            target_quantization = load_state.get("target_quantization")
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{target_model['label']} / {target_quantization['label']} is still "
+                    "loading. Wait for the progress bar to finish before sending a turn."
+                ),
+            )
+
+        if not self.is_loaded:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No model is loaded yet. Click Load model for {spec['label']} in "
+                    f"{quantization_spec['label']} first."
+                ),
+            )
+
+        if (
+            self._current_model_key != spec["key"]
+            or self._current_quantization_key != quantization_spec["key"]
+        ):
+            loaded_spec = get_model_spec(self._current_model_key)
+            loaded_quantization = get_quantization_spec(self._current_quantization_key)
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"VRAM currently holds {loaded_spec['label']} in "
+                    f"{loaded_quantization['label']}. Click Load model to switch to "
+                    f"{spec['label']} / {quantization_spec['label']} before sending."
+                ),
+            )
+
+        return self._processor, self._model, spec, quantization_spec
+
+    def health(self) -> dict:
+        active_spec = get_model_spec(self._current_model_key or DEFAULT_MODEL_KEY)
+        active_quantization = get_quantization_spec(
+            self._current_quantization_key or DEFAULT_QUANTIZATION_KEY
+        )
+        windows_commit_snapshot = get_windows_commit_snapshot()
+        gpu_total_memory_gib = get_gpu_total_memory_gib()
+        return {
+            "status": "ready",
+            "active_model_key": active_spec["key"],
+            "active_model": serialize_model_spec(active_spec),
+            "active_quantization_key": active_quantization["key"],
+            "active_quantization": serialize_quantization_spec(active_quantization),
+            "runtime_family": self._runtime_family,
+            "tts": tts_service.health(),
+            "loaded": self.is_loaded,
+            "local_files_only": LOCAL_FILES_ONLY,
+            "cache_dir": str(CACHE_DIR),
+            "log_path": str(LOG_PATH),
+            "wsl_vllm_log_path": str(WSL_VLLM_LOG_PATH),
+            "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
+            "cuda_available": torch.cuda.is_available(),
+            "gpu_total_memory_gib": gpu_total_memory_gib,
+            "vram_allocated_gib": round(torch.cuda.memory_allocated() / (1024**3), 2)
+            if torch.cuda.is_available() and self.is_loaded
+            else 0.0,
+            "vram_reserved_gib": round(torch.cuda.memory_reserved() / (1024**3), 2)
+            if torch.cuda.is_available() and self.is_loaded
+            else 0.0,
+            "windows_commit_available_gib": windows_commit_snapshot["available_commit_gib"]
+            if windows_commit_snapshot
+            else None,
+            "windows_commit_limit_gib": windows_commit_snapshot["commit_limit_gib"]
+            if windows_commit_snapshot
+            else None,
+            "loaded_at": self.loaded_at,
+            "load_state": self.get_load_state(),
+        }
+
+    def generate(
+        self,
+        *,
+        model_key: str,
+        quantization_key: str,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        image: Image.Image | None,
+        audio: np.ndarray | None,
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        thinking: bool,
+    ) -> dict:
+        processor, model, spec, quantization_spec = self.require_loaded_selection(
+            model_key, quantization_key
+        )
+        if self._runtime_family == "llama.cpp":
+            if image is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{spec['label']} in {quantization_spec['label']} is currently wired "
+                        "for fast text chat only in this app build."
+                    ),
+                )
+            if audio is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{spec['label']} in {quantization_spec['label']} does not support "
+                        "audio input in this runtime path."
+                    ),
+                )
+            return self._llama_cpp_runtime.generate(
+                spec=spec,
+                quantization_spec=quantization_spec,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+        if self._runtime_family == "vllm-wsl":
+            if audio is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{spec['label']} in {quantization_spec['label']} does not support "
+                        "audio input in this runtime path."
+                    ),
+                )
+            return self._wsl_vllm_runtime.generate(
+                spec=spec,
+                quantization_spec=quantization_spec,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+                image=image,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+            )
+        messages = self._build_messages(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history=history,
+            image=image,
+            audio=audio,
+        )
+
+        start_time = time.perf_counter()
+        with self._generate_lock:
+            inputs = processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                add_generation_prompt=True,
+                enable_thinking=thinking,
+            ).to(model.device)
+            input_len = int(inputs["input_ids"].shape[-1])
+            generation_kwargs = self._build_generation_kwargs(
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
+
+            with torch.inference_mode():
+                outputs = model.generate(**inputs, **generation_kwargs)
+
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000, 1)
+        return self._serialize_generation_payload(
+            processor=processor,
+            outputs=outputs,
+            input_len=input_len,
+            spec=spec,
+            quantization_spec=quantization_spec,
+            elapsed_ms=elapsed_ms,
+        )
+
+    def stream_generate(
+        self,
+        *,
+        model_key: str,
+        quantization_key: str,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        image: Image.Image | None,
+        audio: np.ndarray | None,
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+        top_k: int,
+        thinking: bool,
+        tts_enabled: bool,
+    ):
+        processor, model, spec, quantization_spec = self.require_loaded_selection(
+            model_key, quantization_key
+        )
+        if self._runtime_family == "llama.cpp":
+            if image is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{spec['label']} in {quantization_spec['label']} is currently wired "
+                        "for fast text chat only in this app build."
+                    ),
+                )
+            if audio is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{spec['label']} in {quantization_spec['label']} does not support "
+                        "audio input in this runtime path."
+                    ),
+                )
+            yield from self._llama_cpp_runtime.stream_generate(
+                spec=spec,
+                quantization_spec=quantization_spec,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                tts_enabled=tts_enabled,
+            )
+            return
+        if self._runtime_family == "vllm-wsl":
+            if audio is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{spec['label']} in {quantization_spec['label']} does not support "
+                        "audio input in this runtime path."
+                    ),
+                )
+            yield from self._wsl_vllm_runtime.stream_generate(
+                spec=spec,
+                quantization_spec=quantization_spec,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                history=history,
+                image=image,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                tts_enabled=tts_enabled,
+            )
+            return
+        messages = self._build_messages(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history=history,
+            image=image,
+            audio=audio,
+        )
+
+        start_time = time.perf_counter()
+        with self._generate_lock:
+            inputs = processor.apply_chat_template(
+                messages,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                add_generation_prompt=True,
+                enable_thinking=thinking,
+            ).to(model.device)
+            input_len = int(inputs["input_ids"].shape[-1])
+            generation_kwargs = self._build_generation_kwargs(
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+            )
+            streamer = TextIteratorStreamer(
+                processor.tokenizer,
+                skip_prompt=True,
+                skip_special_tokens=False,
+            )
+            generation_kwargs["streamer"] = streamer
+
+            result_holder: dict[str, object] = {}
+            error_holder: dict[str, Exception] = {}
+
+            def run_generation() -> None:
+                try:
+                    with torch.inference_mode():
+                        result_holder["outputs"] = model.generate(**inputs, **generation_kwargs)
+                except Exception as exc:  # pragma: no cover - runtime safety
+                    error_holder["error"] = exc
+                    logger.exception(
+                        "Streaming generation failed key=%s quantization=%s",
+                        spec["key"],
+                        quantization_spec["key"],
+                    )
+                finally:
+                    streamer.on_finalized_text("", stream_end=True)
+
+            generation_thread = threading.Thread(
+                target=run_generation,
+                daemon=True,
+                name=f"gemma-stream-{spec['key']}-{quantization_spec['key']}",
+            )
+            generation_thread.start()
+
+            yield {"event": "start"}
+            for text_chunk in streamer:
+                if text_chunk:
+                    yield {"event": "token", "text": text_chunk}
+
+            generation_thread.join()
+
+        if "error" in error_holder:
+            raise error_holder["error"]
+
+        outputs = result_holder.get("outputs")
+        if outputs is None:
+            raise RuntimeError("Streaming generation finished without output tokens.")
+
+        response_payload = self._serialize_generation_payload(
+            processor=processor,
+            outputs=outputs,
+            input_len=input_len,
+            spec=spec,
+            quantization_spec=quantization_spec,
+            elapsed_ms=round((time.perf_counter() - start_time) * 1000, 1),
+        )
+
+        if tts_enabled and response_payload.get("reply"):
+            try:
+                response_payload["tts_audio"] = tts_service.synthesize(response_payload["reply"])
+            except Exception:
+                logger.exception(
+                    "TTS synthesis failed after streaming key=%s quantization=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                )
+                response_payload["tts_audio"] = None
+                response_payload["tts_audio_error"] = "Local TTS synthesis failed."
+
+        yield {"event": "done", "payload": response_payload}
 
 
 def extract_reply(parsed: object) -> dict:
@@ -790,6 +2423,90 @@ def load_audio(upload: UploadFile | None, target_rate: int) -> np.ndarray | None
     return resample_audio(audio, sample_rate, target_rate)
 
 
+def prepare_generation_request(
+    *,
+    model_key: str,
+    quantization_key: str,
+    prompt: str,
+    system_prompt: str,
+    history_json: str,
+    image: UploadFile | None,
+    audio: UploadFile | None,
+) -> tuple[dict, dict, str, str, list[HistoryTurn], Image.Image | None, np.ndarray | None]:
+    spec = get_model_spec(model_key)
+    quantization_spec = get_quantization_spec(quantization_key)
+    logger.info(
+        "Generate requested key=%s quantization=%s image=%s audio=%s",
+        spec["key"],
+        quantization_spec["key"],
+        image is not None,
+        audio is not None,
+    )
+    history = decode_history(history_json)
+
+    if quantization_spec.get("runtime_family") == "llama.cpp" and image is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{spec['label']} in {quantization_spec['label']} is currently wired for "
+                "fast text chat only in this app build."
+            ),
+        )
+
+    if quantization_spec.get("runtime_family") == "llama.cpp" and audio is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{spec['label']} in {quantization_spec['label']} does not support audio "
+                "input in this runtime path."
+            ),
+        )
+
+    image_payload = load_image(image)
+
+    if image_payload is not None and not spec["supports_image"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{spec['label']} does not support image input in the official tables.",
+        )
+
+    if audio is not None and not spec["supports_audio"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{spec['label']} does not support audio input according to the official "
+                "Gemma 4 Supported Modalities tables."
+            ),
+        )
+
+    processor, _, _, _ = service.require_loaded_selection(
+        spec["key"], quantization_spec["key"]
+    )
+    target_rate = getattr(getattr(processor, "feature_extractor", None), "sampling_rate", 16000)
+    audio_payload = load_audio(audio, target_rate)
+
+    normalized_prompt = prompt.strip()
+    if not normalized_prompt:
+        if image_payload is not None and audio_payload is not None:
+            normalized_prompt = "Describe the image and transcribe the audio."
+        elif image_payload is not None:
+            normalized_prompt = "Describe this image."
+        elif audio_payload is not None:
+            normalized_prompt = "Transcribe this audio."
+        else:
+            raise HTTPException(status_code=400, detail="Prompt, image, or audio is required.")
+
+    return (
+        spec,
+        quantization_spec,
+        normalized_prompt,
+        system_prompt or DEFAULT_SYSTEM_PROMPT,
+        history[-8:],
+        image_payload,
+        audio_payload,
+    )
+
+
 service = GemmaService()
 tts_service = LocalTTSService()
 app = FastAPI(title="Gemma 4 Lab")
@@ -805,6 +2522,15 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def disable_static_caching(request: Request, call_next):
+    response = await call_next(request)
+    if request.method == "GET" and not request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
 
 
 @app.on_event("startup")
@@ -850,6 +2576,13 @@ def api_models() -> dict:
     }
 
 
+@app.get("/api/models/load-status")
+def api_model_load_status() -> dict:
+    return {
+        "load_state": service.get_load_state(),
+    }
+
+
 @app.post("/api/models/load")
 def api_load_model(request: ModelLoadRequest) -> dict:
     logger.info(
@@ -857,11 +2590,11 @@ def api_load_model(request: ModelLoadRequest) -> dict:
         request.model_key,
         request.quantization_key,
     )
-    _, _, spec, quantization_spec = service.ensure_loaded(
-        request.model_key, request.quantization_key
-    )
+    load_result = service.start_load(request.model_key, request.quantization_key)
     return {
-        "message": f"{spec['label']} is loaded in {quantization_spec['label']}.",
+        "accepted": load_result["accepted"],
+        "message": load_result["message"],
+        "load_state": load_result["load_state"],
         "health": service.health(),
     }
 
@@ -882,55 +2615,31 @@ async def api_generate(
     image: UploadFile | None = File(None),
     audio: UploadFile | None = File(None),
 ) -> dict:
-    spec = get_model_spec(model_key)
-    quantization_spec = get_quantization_spec(quantization_key)
+    spec, quantization_spec, normalized_prompt, normalized_system_prompt, history, image_payload, audio_payload = (
+        prepare_generation_request(
+            model_key=model_key,
+            quantization_key=quantization_key,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history_json=history_json,
+            image=image,
+            audio=audio,
+        )
+    )
     logger.info(
-        "Generate requested key=%s quantization=%s image=%s audio=%s thinking=%s tts=%s",
+        "Generate execution key=%s quantization=%s thinking=%s tts=%s",
         spec["key"],
         quantization_spec["key"],
-        image is not None,
-        audio is not None,
         thinking,
         tts_enabled,
     )
-    history = decode_history(history_json)
-    image_payload = load_image(image)
-
-    if image_payload is not None and not spec["supports_image"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"{spec['label']} does not support image input in the official tables.",
-        )
-
-    if audio is not None and not spec["supports_audio"]:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"{spec['label']} does not support audio input according to the official "
-                "Gemma 4 Supported Modalities tables."
-            ),
-        )
-
-    processor, _, _, _ = service.ensure_loaded(spec["key"], quantization_spec["key"])
-    audio_payload = load_audio(audio, processor.feature_extractor.sampling_rate)
-
-    normalized_prompt = prompt.strip()
-    if not normalized_prompt:
-        if image_payload is not None and audio_payload is not None:
-            normalized_prompt = "Describe the image and transcribe the audio."
-        elif image_payload is not None:
-            normalized_prompt = "Describe this image."
-        elif audio_payload is not None:
-            normalized_prompt = "Transcribe this audio."
-        else:
-            raise HTTPException(status_code=400, detail="Prompt, image, or audio is required.")
 
     response_payload = service.generate(
         model_key=spec["key"],
         quantization_key=quantization_spec["key"],
         prompt=normalized_prompt,
-        system_prompt=system_prompt or DEFAULT_SYSTEM_PROMPT,
-        history=history[-8:],
+        system_prompt=normalized_system_prompt,
+        history=history,
         image=image_payload,
         audio=audio_payload,
         max_new_tokens=max(32, min(max_new_tokens, 1024)),
@@ -953,6 +2662,84 @@ async def api_generate(
             response_payload["tts_audio_error"] = "Local TTS synthesis failed."
 
     return response_payload
+
+
+@app.post("/api/generate-stream")
+async def api_generate_stream(
+    model_key: str = Form(DEFAULT_MODEL_KEY),
+    quantization_key: str = Form(DEFAULT_QUANTIZATION_KEY),
+    prompt: str = Form(""),
+    system_prompt: str = Form(DEFAULT_SYSTEM_PROMPT),
+    history_json: str = Form("[]"),
+    max_new_tokens: int = Form(256),
+    temperature: float = Form(1.0),
+    top_p: float = Form(0.95),
+    top_k: int = Form(64),
+    thinking: bool = Form(False),
+    tts_enabled: bool = Form(False),
+    image: UploadFile | None = File(None),
+    audio: UploadFile | None = File(None),
+) -> StreamingResponse:
+    spec, quantization_spec, normalized_prompt, normalized_system_prompt, history, image_payload, audio_payload = (
+        prepare_generation_request(
+            model_key=model_key,
+            quantization_key=quantization_key,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history_json=history_json,
+            image=image,
+            audio=audio,
+        )
+    )
+    logger.info(
+        "Generate stream execution key=%s quantization=%s thinking=%s tts=%s",
+        spec["key"],
+        quantization_spec["key"],
+        thinking,
+        tts_enabled,
+    )
+
+    def event_stream():
+        try:
+            for event in service.stream_generate(
+                model_key=spec["key"],
+                quantization_key=quantization_spec["key"],
+                prompt=normalized_prompt,
+                system_prompt=normalized_system_prompt,
+                history=history,
+                image=image_payload,
+                audio=audio_payload,
+                max_new_tokens=max(32, min(max_new_tokens, 1024)),
+                temperature=max(0.0, min(temperature, 2.0)),
+                top_p=max(0.1, min(top_p, 1.0)),
+                top_k=max(1, min(top_k, 128)),
+                thinking=thinking,
+                tts_enabled=tts_enabled,
+            ):
+                yield (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+        except HTTPException as exc:
+            yield (
+                json.dumps(
+                    {"event": "error", "detail": str(exc.detail)},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+        except Exception as exc:  # pragma: no cover - runtime safety
+            logger.exception(
+                "Unhandled stream error key=%s quantization=%s",
+                spec["key"],
+                quantization_spec["key"],
+            )
+            yield (
+                json.dumps(
+                    {"event": "error", "detail": str(render_model_load_error(spec, exc))},
+                    ensure_ascii=False,
+                )
+                + "\n"
+            ).encode("utf-8")
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")
 
 
 @app.get("/api/tts/clips/{clip_id}.wav")

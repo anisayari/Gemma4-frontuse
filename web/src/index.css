@@ -29,6 +29,12 @@
   --outline-variant: #40485d;
   --primary-gradient: linear-gradient(135deg, #88adff 0%, #719eff 100%);
   --ambient-shadow: 0 24px 64px rgba(222, 229, 255, 0.06);
+  /* Densité UI : espacements dérivés du thème */
+  --page-pad-x: clamp(1rem, 2.5vw, 1.5rem);
+  --section-gap: 1.25rem;
+  --card-pad: 0.875rem 1rem;
+  --radius-card: 1.25rem;
+  --radius-panel: 1.5rem;
 }
 
 * {

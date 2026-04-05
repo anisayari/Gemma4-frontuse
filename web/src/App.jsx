@@ -201,7 +201,7 @@ function formatElapsed(milliseconds) {
 }
 
 function formatMemory(value) {
-  return value ? `${value.toFixed(2)} GiB` : '0.00 GiB'
+  return typeof value === 'number' ? `${value.toFixed(2)} GiB` : 'n/a'
 }
 
 function getModelMemoryEstimate(model, quantizationKey) {
@@ -218,7 +218,23 @@ function getQuantizationRuntimeLabel(quantization) {
     return 'Unknown runtime'
   }
 
-  return quantization.runtime_supported ? 'Available here' : 'Planning only'
+  if (quantization.runtime_supported) {
+    if (quantization.runtime_family === 'llama.cpp') {
+      return 'llama.cpp local'
+    }
+
+    if (quantization.runtime_family === 'vllm-wsl') {
+      return 'WSL vLLM'
+    }
+
+    return 'Available here'
+  }
+
+  if (quantization.status === 'linux-vllm-only') {
+    return 'Linux vLLM only'
+  }
+
+  return 'Planning only'
 }
 
 function formatMessageTime(value) {
@@ -338,6 +354,52 @@ function updateThreadInList(currentThreads, threadId, updater) {
   return updatedThread ? [updatedThread, ...nextThreads] : currentThreads
 }
 
+function updateMessageInThread(currentThreads, threadId, messageId, updater) {
+  return updateThreadInList(currentThreads, threadId, (thread) => ({
+    ...thread,
+    updatedAt: Date.now(),
+    messages: thread.messages.map((message) =>
+      message.id === messageId ? updater(message) : message,
+    ),
+  }))
+}
+
+async function readNdjsonStream(response, onEvent) {
+  if (!response.body) {
+    throw new Error('Streaming response body unavailable in this browser.')
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) {
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    let newlineIndex = buffer.indexOf('\n')
+
+    while (newlineIndex >= 0) {
+      const line = buffer.slice(0, newlineIndex).trim()
+      buffer = buffer.slice(newlineIndex + 1)
+
+      if (line) {
+        onEvent(JSON.parse(line))
+      }
+
+      newlineIndex = buffer.indexOf('\n')
+    }
+  }
+
+  const tail = buffer.trim()
+  if (tail) {
+    onEvent(JSON.parse(tail))
+  }
+}
+
 function getGreeting() {
   const hour = new Date().getHours()
 
@@ -357,6 +419,14 @@ function getThreadSubtitle(thread) {
 
   if (!latestMessage) {
     return 'Ready for local inference'
+  }
+
+  if (latestMessage.role === 'assistant' && latestMessage.streamingState === 'waiting') {
+    return 'Preparing the first tokens...'
+  }
+
+  if (latestMessage.role === 'assistant' && latestMessage.streamingState === 'streaming') {
+    return 'Streaming reply...'
   }
 
   if (latestMessage.role === 'assistant' && latestMessage.meta) {
@@ -408,6 +478,56 @@ function getAssistantChips(message) {
   return chips
 }
 
+function getDefaultLoadState() {
+  return {
+    status: 'idle',
+    is_loading: false,
+    progress: 0,
+    message: 'Select a model and click Load model.',
+    error: '',
+    target_model_key: DEFAULT_MODEL_KEY,
+    target_model: null,
+    target_quantization_key: DEFAULT_QUANTIZATION_KEY,
+    target_quantization: null,
+    started_at: null,
+    finished_at: null,
+    updated_at: null,
+  }
+}
+
+function normalizeLoadState(loadState) {
+  const fallback = getDefaultLoadState()
+  const progressValue = Number(loadState?.progress)
+
+  return {
+    ...fallback,
+    ...(loadState || {}),
+    status: loadState?.status || fallback.status,
+    is_loading: Boolean(loadState?.is_loading),
+    progress: Number.isFinite(progressValue)
+      ? Math.max(0, Math.min(100, progressValue))
+      : fallback.progress,
+    message: loadState?.message || fallback.message,
+    error: loadState?.error || '',
+  }
+}
+
+function getLoadStatusLabel(loadState, health) {
+  if (loadState.is_loading) {
+    return 'Loading model'
+  }
+
+  if (loadState.status === 'failed') {
+    return 'Load failed'
+  }
+
+  if (health?.loaded) {
+    return 'Warm GPU'
+  }
+
+  return 'Cold start'
+}
+
 function App() {
   const initialWorkspaceRef = useRef(createInitialWorkspace())
   const imageInputRef = useRef(null)
@@ -445,6 +565,7 @@ function App() {
   const [imagePreview, setImagePreview] = useState('')
   const [audioPreview, setAudioPreview] = useState('')
   const [health, setHealth] = useState(null)
+  const [modelLoadState, setModelLoadState] = useState(getDefaultLoadState())
   const [error, setError] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [isLoadingModel, setIsLoadingModel] = useState(false)
@@ -482,9 +603,23 @@ function App() {
     null
   const activeModel = health?.active_model ?? null
   const activeQuantization = health?.active_quantization ?? null
-  const supportsAudio = selectedModel?.supports_audio ?? true
-  const supportsImage = selectedModel?.supports_image ?? true
-  const modalityBadges = selectedModel ? selectedModel.supported_modalities : []
+  const normalizedLoadState = normalizeLoadState(modelLoadState)
+  const isModelLoading = isLoadingModel || normalizedLoadState.is_loading
+  const isLlamaCppRuntime = selectedQuantization?.runtime_family === 'llama.cpp'
+  const isWslVllmRuntime = selectedQuantization?.runtime_family === 'vllm-wsl'
+  const supportsAudio = isLlamaCppRuntime || isWslVllmRuntime
+    ? false
+    : selectedModel?.supports_audio ?? true
+  const supportsImage = isLlamaCppRuntime
+    ? false
+    : selectedModel?.supports_image ?? true
+  const modalityBadges = selectedModel
+    ? isLlamaCppRuntime
+      ? ['text']
+      : isWslVllmRuntime
+        ? selectedModel.supported_modalities.filter((modality) => modality !== 'video')
+        : selectedModel.supported_modalities
+    : []
   const selectedMemoryEstimate = getModelMemoryEstimate(
     selectedModel,
     selectedQuantizationKey,
@@ -493,10 +628,14 @@ function App() {
     activeModel,
     activeQuantization?.key,
   )
-  const modelSwitchPending =
+  const selectedModelLoaded =
     Boolean(health?.loaded) &&
-    (activeModel?.key !== selectedModelKey ||
-      activeQuantization?.key !== selectedQuantizationKey)
+    activeModel?.key === selectedModelKey &&
+    activeQuantization?.key === selectedQuantizationKey
+  const modelSwitchPending =
+    Boolean(selectedModelKey) &&
+    Boolean(selectedQuantizationKey) &&
+    !selectedModelLoaded
   const greeting = getGreeting()
   const activeThreadSubtitle = activeThread
     ? getThreadSubtitle(activeThread)
@@ -507,7 +646,80 @@ function App() {
     quantizationRuntimeSupported &&
     supportsAudio &&
     ['e2b', 'e4b'].includes(selectedModelKey)
+  const audioAttachmentHint = !quantizationRuntimeSupported
+    ? 'This quantization is planning only in the current backend'
+    : supportsAudio
+      ? 'Attach audio'
+      : isWslVllmRuntime
+        ? 'Audio is unavailable in the current WSL vLLM bridge'
+        : 'Audio is only available on E2B and E4B'
   const latestTurns = messages.slice(-4)
+  const loadTargetModel = normalizedLoadState.target_model ?? selectedModel
+  const loadTargetQuantization =
+    normalizedLoadState.target_quantization ?? selectedQuantization
+  const loadPanelState =
+    normalizedLoadState.status === 'failed'
+      ? 'failed'
+      : isModelLoading
+        ? 'loading'
+        : selectedModelLoaded
+          ? 'ready'
+          : 'pending'
+  const shouldShowLoadPanel =
+    isModelLoading ||
+    normalizedLoadState.status === 'failed' ||
+    modelSwitchPending ||
+    !health?.loaded ||
+    !quantizationRuntimeSupported
+  const loadProgressValue =
+    loadPanelState === 'ready'
+      ? 100
+      : loadPanelState === 'pending'
+        ? 0
+        : normalizedLoadState.progress
+  const loadPanelHeadline = isModelLoading
+    ? `Loading ${loadTargetModel?.label || selectedModel?.label || 'Gemma 4'}`
+    : normalizedLoadState.status === 'failed'
+      ? normalizedLoadState.error
+        ? 'Load blocked'
+        : 'Load stopped'
+      : selectedModelLoaded
+        ? `${activeModel?.label || 'Gemma 4'} ready`
+        : 'Explicit model loading'
+  const loadPanelMessage = (() => {
+    if (normalizedLoadState.error) {
+      return normalizedLoadState.error
+    }
+
+    if (isModelLoading) {
+      return normalizedLoadState.message
+    }
+
+    if (!quantizationRuntimeSupported) {
+      return (
+        selectedQuantization?.doc_summary ||
+        'This quantization is visible for planning only in the current backend.'
+      )
+    }
+
+    if (!health?.loaded) {
+      return `Nothing is loaded yet. Click Load model to warm ${selectedModel?.label || 'the selected variant'} in ${selectedQuantization?.label || 'BF16'}.`
+    }
+
+    if (modelSwitchPending && activeModel && activeQuantization) {
+      return `VRAM currently holds ${activeModel.label} in ${activeQuantization.label}. Click Load model to switch to ${selectedModel?.label || 'the selected variant'} / ${selectedQuantization?.label || 'BF16'}.`
+    }
+
+    return normalizedLoadState.message
+  })()
+  const loadStatusLabel = getLoadStatusLabel(normalizedLoadState, health)
+  const loadStatusMeta = loadTargetModel?.label
+    ? `${loadTargetModel.label} | ${loadTargetQuantization?.label || 'BF16'}`
+    : `${selectedModel?.label || 'Gemma 4'} | ${selectedQuantization?.label || 'BF16'}`
+  const canSendTurns =
+    Boolean(selectedModelLoaded) &&
+    !isModelLoading &&
+    quantizationRuntimeSupported
 
   useEffect(() => {
     if (!imageFile) {
@@ -547,6 +759,37 @@ function App() {
   }, [audioFile, selectedModel, supportsAudio])
 
   useEffect(() => {
+    if (!supportsImage && imageFile) {
+      setImageFile(null)
+      setError(
+        `${
+          selectedModel?.label || 'This model'
+        } in ${selectedQuantization?.label || 'the selected quantization'} is currently wired for text chat only in this app build.`,
+      )
+    }
+  }, [imageFile, selectedModel, selectedQuantization, supportsImage])
+
+  useEffect(() => {
+    if (!selectedModel?.memory_requirements_gib) {
+      return
+    }
+
+    const compatibleQuantizations = Object.keys(selectedModel.memory_requirements_gib)
+    if (compatibleQuantizations.length === 0) {
+      return
+    }
+
+    if (compatibleQuantizations.includes(selectedQuantizationKey)) {
+      return
+    }
+
+    const fallbackQuantization = compatibleQuantizations.includes(DEFAULT_QUANTIZATION_KEY)
+      ? DEFAULT_QUANTIZATION_KEY
+      : compatibleQuantizations[0]
+    setSelectedQuantizationKey(fallbackQuantization)
+  }, [selectedModel, selectedQuantizationKey])
+
+  useEffect(() => {
     let isActive = true
 
     async function bootstrap() {
@@ -577,6 +820,7 @@ function App() {
 
         startTransition(() => {
           setHealth(healthData)
+          setModelLoadState(normalizeLoadState(healthData.load_state))
           setModels(modelsData.models)
           setDocsNote(modelsData.docs_note)
           setQuantizations(modelsData.quantizations || [])
@@ -601,6 +845,7 @@ function App() {
 
         startTransition(() => {
           setHealth(null)
+          setModelLoadState(getDefaultLoadState())
           setModels([])
           setQuantizations([])
         })
@@ -618,12 +863,14 @@ function App() {
         if (isActive) {
           startTransition(() => {
             setHealth(data)
+            setModelLoadState(normalizeLoadState(data.load_state))
           })
         }
       } catch {
         if (isActive) {
           startTransition(() => {
             setHealth(null)
+            setModelLoadState(getDefaultLoadState())
           })
         }
       }
@@ -722,12 +969,75 @@ function App() {
 
     startTransition(() => {
       setHealth(healthData)
+      setModelLoadState(normalizeLoadState(healthData.load_state))
       setModels(modelsData.models)
       setDocsNote(modelsData.docs_note)
       setQuantizations(modelsData.quantizations || [])
       setQuantizationNote(modelsData.quantization_note || '')
     })
   }
+
+  useEffect(() => {
+    if (!isModelLoading) {
+      return undefined
+    }
+
+    let isActive = true
+
+    async function pollLoadState() {
+      try {
+        const [loadResponse, healthResponse] = await Promise.all([
+          fetch('/api/models/load-status'),
+          fetch('/api/health'),
+        ])
+
+        if (!loadResponse.ok || !healthResponse.ok) {
+          throw new Error('Unable to refresh model load status.')
+        }
+
+        const [loadData, healthData] = await Promise.all([
+          parseApiPayload(loadResponse),
+          parseApiPayload(healthResponse),
+        ])
+
+        if (!isActive) {
+          return
+        }
+
+        const nextLoadState = normalizeLoadState(loadData.load_state)
+
+        startTransition(() => {
+          setModelLoadState(nextLoadState)
+          setHealth(healthData)
+        })
+
+        if (!nextLoadState.is_loading) {
+          setIsLoadingModel(false)
+
+          if (nextLoadState.status === 'failed' && nextLoadState.error) {
+            setError(nextLoadState.error)
+          }
+        }
+      } catch (pollError) {
+        if (!isActive) {
+          return
+        }
+
+        setIsLoadingModel(false)
+        setError(pollError.message)
+      }
+    }
+
+    void pollLoadState()
+    const timer = window.setInterval(() => {
+      void pollLoadState()
+    }, 900)
+
+    return () => {
+      isActive = false
+      window.clearInterval(timer)
+    }
+  }, [isModelLoading])
 
   async function runTurn({
     promptText,
@@ -742,10 +1052,40 @@ function App() {
       return null
     }
 
+    if (isModelLoading || normalizedLoadState.is_loading) {
+      const detail =
+        normalizedLoadState.error ||
+        normalizedLoadState.message ||
+        'A model is still loading. Wait for it to finish before sending.'
+      setError(detail)
+      if (mode === 'live') {
+        setLiveError(detail)
+      }
+      return null
+    }
+
     if (!quantizationRuntimeSupported) {
       const detail =
         selectedQuantization?.doc_summary ||
         'This quantization is visible for planning only in the current backend.'
+      setError(detail)
+      if (mode === 'live') {
+        setLiveError(detail)
+      }
+      return null
+    }
+
+    if (!health?.loaded) {
+      const detail = `No model is loaded yet. Click Load model for ${selectedModel?.label || 'the selected variant'} in ${selectedQuantization?.label || 'BF16'} first.`
+      setError(detail)
+      if (mode === 'live') {
+        setLiveError(detail)
+      }
+      return null
+    }
+
+    if (!selectedModelLoaded) {
+      const detail = `VRAM currently holds ${activeModel?.label || 'another model'} in ${activeQuantization?.label || 'BF16'}. Click Load model to switch to ${selectedModel?.label || 'the selected variant'} / ${selectedQuantization?.label || 'BF16'} before sending.`
       setError(detail)
       if (mode === 'live') {
         setLiveError(detail)
@@ -759,6 +1099,7 @@ function App() {
 
     if (mode === 'live') {
       setLiveError('')
+      setLiveStatus('Model is preparing the reply...')
     }
 
     const threadId = activeThread.id
@@ -774,6 +1115,14 @@ function App() {
       ),
       attachments: makeAttachmentSummary(imageAsset, audioAsset),
     }
+    const pendingAssistantId = crypto.randomUUID()
+    const pendingAssistantMessage = {
+      id: pendingAssistantId,
+      role: 'assistant',
+      content: '',
+      createdAt: Date.now(),
+      streamingState: 'waiting',
+    }
 
     startTransition(() => {
       setThreads((current) =>
@@ -784,7 +1133,7 @@ function App() {
               ? titleHint || makeThreadTitle(visibleText, imageAsset, audioAsset)
               : thread.title,
           updatedAt: Date.now(),
-          messages: [...thread.messages, pendingUserMessage],
+          messages: [...thread.messages, pendingUserMessage, pendingAssistantMessage],
         })),
       )
     })
@@ -816,36 +1165,74 @@ function App() {
     }
 
     try {
-      const response = await fetch('/api/generate', {
+      const response = await fetch('/api/generate-stream', {
         method: 'POST',
         body: formData,
       })
-      const data = await parseApiPayload(response)
 
       if (!response.ok) {
+        const data = await parseApiPayload(response)
         throw new Error(data.detail || 'Generation failed.')
       }
 
-      if (mode === 'live' && data.tts_audio_error) {
-        setLiveError(data.tts_audio_error)
+      let streamError = ''
+      let streamedText = ''
+      let finalPayload = null
+
+      await readNdjsonStream(response, (event) => {
+        if (event.event === 'token') {
+          streamedText += event.text || ''
+          startTransition(() => {
+            setThreads((current) =>
+              updateMessageInThread(current, threadId, pendingAssistantId, (message) => ({
+                ...message,
+                content: streamedText,
+                streamingState: 'streaming',
+              })),
+            )
+          })
+
+          if (mode === 'live') {
+            setLiveStatus('Receiving live reply...')
+          }
+          return
+        }
+
+        if (event.event === 'done') {
+          finalPayload = event.payload
+          return
+        }
+
+        if (event.event === 'error') {
+          streamError = event.detail || 'Generation failed.'
+        }
+      })
+
+      if (streamError) {
+        throw new Error(streamError)
+      }
+
+      if (!finalPayload) {
+        throw new Error('Streaming ended before the final payload arrived.')
+      }
+
+      if (mode === 'live' && finalPayload.tts_audio_error) {
+        setLiveError(finalPayload.tts_audio_error)
       }
 
       const assistantMessage = {
-        id: crypto.randomUUID(),
+        id: pendingAssistantId,
         role: 'assistant',
-        content: data.reply,
-        thought: data.thought,
-        meta: data,
+        content: finalPayload.reply,
+        thought: finalPayload.thought,
+        meta: finalPayload,
         createdAt: Date.now(),
+        streamingState: 'done',
       }
 
       startTransition(() => {
         setThreads((current) =>
-          updateThreadInList(current, threadId, (thread) => ({
-            ...thread,
-            updatedAt: Date.now(),
-            messages: [...thread.messages, assistantMessage],
-          })),
+          updateMessageInThread(current, threadId, pendingAssistantId, () => assistantMessage),
         )
 
         if (clearComposer) {
@@ -856,9 +1243,9 @@ function App() {
       })
 
       if (mode === 'live') {
-        if (autoSpeak && data.tts_audio?.url) {
+        if (autoSpeak && finalPayload.tts_audio?.url) {
           const didSpeak = await playGeneratedAudio(
-            data.tts_audio,
+            finalPayload.tts_audio,
             playbackAudioRef,
             () => {
               setIsSpeaking(true)
@@ -890,22 +1277,15 @@ function App() {
 
       if (mode === 'live') {
         setLiveError(submitError.message)
+        setLiveStatus('Live session ready.')
       }
 
       startTransition(() => {
         setThreads((current) =>
-          updateThreadInList(current, threadId, (thread) => ({
-            ...thread,
-            updatedAt: Date.now(),
-            messages: [
-              ...thread.messages,
-              {
-                id: crypto.randomUUID(),
-                role: 'assistant',
-                content: submitError.message,
-                createdAt: Date.now(),
-              },
-            ],
+          updateMessageInThread(current, threadId, pendingAssistantId, (message) => ({
+            ...message,
+            content: submitError.message,
+            streamingState: 'error',
           })),
         )
       })
@@ -1239,16 +1619,10 @@ function App() {
       return
     }
 
-    if (!quantizationRuntimeSupported) {
-      setError(
-        selectedQuantization?.doc_summary ||
-          'This quantization is visible for planning only in the current backend.',
-      )
-      return
-    }
-
     setError('')
     setIsLoadingModel(true)
+    setIsModelMenuOpen(false)
+    setIsQuantizationMenuOpen(false)
 
     try {
       const response = await fetch('/api/models/load', {
@@ -1267,14 +1641,22 @@ function App() {
         throw new Error(data.detail || 'Unable to load model.')
       }
 
+      const nextLoadState = normalizeLoadState(data.load_state)
+
       startTransition(() => {
         setHealth(data.health)
-        setIsModelMenuOpen(false)
+        setModelLoadState(nextLoadState)
       })
-      await refreshModelsAndHealth()
+
+      if (!nextLoadState.is_loading) {
+        setIsLoadingModel(false)
+      }
+
+      if (nextLoadState.status === 'failed' && nextLoadState.error) {
+        setError(nextLoadState.error)
+      }
     } catch (loadError) {
       setError(loadError.message)
-    } finally {
       setIsLoadingModel(false)
     }
   }
@@ -1368,10 +1750,16 @@ function App() {
             </div>
 
             <div
-              className={`status-pill ${health?.loaded ? 'is-ready' : 'is-cold'}`}
+              className={`status-pill ${
+                isModelLoading
+                  ? 'is-loading'
+                  : health?.loaded
+                    ? 'is-ready'
+                    : 'is-cold'
+              }`}
             >
               <span className="status-dot" />
-              <span>{health?.loaded ? 'Warm GPU' : 'Cold start'}</span>
+              <span>{loadStatusLabel}</span>
             </div>
           </div>
 
@@ -1407,185 +1795,176 @@ function App() {
               </button>
             </div>
 
-            <div className="model-picker" ref={modelPickerRef}>
-              <button
-                className="model-trigger"
-                type="button"
-                onClick={() => {
-                  setIsQuantizationMenuOpen(false)
-                  setIsModelMenuOpen((current) => !current)
-                }}
-              >
-                <span className="model-trigger-copy">
-                  <span className="model-trigger-label">Model</span>
-                  <strong>{selectedModel?.label || 'Gemma 4'}</strong>
-                </span>
-                <span className="material-symbols-outlined">expand_more</span>
-              </button>
+            <div className="topbar-load-group">
+              <div className="model-picker" ref={modelPickerRef}>
+                <button
+                  className="model-trigger"
+                  type="button"
+                  onClick={() => {
+                    setIsQuantizationMenuOpen(false)
+                    setIsModelMenuOpen((current) => !current)
+                  }}
+                >
+                  <span className="model-trigger-copy">
+                    <span className="model-trigger-label">Model</span>
+                    <strong>{selectedModel?.label || 'Gemma 4'}</strong>
+                  </span>
+                  <span className="material-symbols-outlined">expand_more</span>
+                </button>
 
-              {isModelMenuOpen ? (
-                <div className="model-menu">
-                  <div className="model-menu-head">
-                    <div>
-                      <p className="section-label">Variant selector</p>
-                      <h2>Official Gemma 4 lineup</h2>
+                {isModelMenuOpen ? (
+                  <div className="model-menu">
+                    <div className="model-menu-head">
+                      <div>
+                        <p className="section-label">Variant selector</p>
+                        <h2>Official Gemma 4 lineup</h2>
+                      </div>
                     </div>
 
-                    <button
-                      className="ghost-action"
-                      type="button"
-                      onClick={handleLoadModel}
-                      disabled={
-                        isLoadingModel ||
-                        isSending ||
-                        isLiveSubmitting ||
-                        isLiveRecording ||
-                        !selectedModelKey ||
-                        !selectedQuantizationKey ||
-                        !quantizationRuntimeSupported
-                      }
-                    >
-                      {isLoadingModel ? 'Loading...' : 'Warm selected'}
-                    </button>
+                    <div className="model-menu-list">
+                      {models.map((model) => {
+                        const isSelected = model.key === selectedModelKey
+                        const isLoaded = activeModel?.key === model.key && health?.loaded
+
+                        return (
+                          <button
+                            key={model.key}
+                            className={`model-menu-item ${
+                              isSelected ? 'is-selected' : ''
+                            } ${isLoaded ? 'is-loaded' : ''}`}
+                            type="button"
+                            onClick={() => {
+                              setSelectedModelKey(model.key)
+                              setIsModelMenuOpen(false)
+                            }}
+                          >
+                            <div className="model-menu-row">
+                              <strong>{model.label}</strong>
+                              <span>{isLoaded ? 'Loaded' : model.tier}</span>
+                            </div>
+                            <p>{model.doc_summary}</p>
+                            <div className="message-chip-row">
+                              <span className="message-chip">{model.architecture}</span>
+                              <span className="message-chip">{model.context_length}</span>
+                              {model.supported_modalities.map((modality) => (
+                                <span
+                                  key={`${model.key}-${modality}`}
+                                  className="message-chip is-modality"
+                                >
+                                  {modality}
+                                </span>
+                              ))}
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
+                ) : null}
+              </div>
 
-                  <div className="model-menu-list">
-                    {models.map((model) => {
-                      const isSelected = model.key === selectedModelKey
-                      const isLoaded = activeModel?.key === model.key && health?.loaded
+              <div className="model-picker" ref={quantizationPickerRef}>
+                <button
+                  className="model-trigger"
+                  type="button"
+                  onClick={() => {
+                    setIsModelMenuOpen(false)
+                    setIsQuantizationMenuOpen((current) => !current)
+                  }}
+                >
+                  <span className="model-trigger-copy">
+                    <span className="model-trigger-label">Quantization</span>
+                    <strong>{selectedQuantization?.label || 'BF16'}</strong>
+                  </span>
+                  <span className="material-symbols-outlined">expand_more</span>
+                </button>
 
-                      return (
-                        <button
-                          key={model.key}
-                          className={`model-menu-item ${
-                            isSelected ? 'is-selected' : ''
-                          } ${isLoaded ? 'is-loaded' : ''}`}
-                          type="button"
-                          onClick={() => {
-                            setSelectedModelKey(model.key)
-                            setIsModelMenuOpen(false)
-                          }}
-                        >
-                          <div className="model-menu-row">
-                            <strong>{model.label}</strong>
-                            <span>{isLoaded ? 'Loaded' : model.tier}</span>
-                          </div>
-                          <p>{model.doc_summary}</p>
-                          <div className="message-chip-row">
-                            <span className="message-chip">{model.architecture}</span>
-                            <span className="message-chip">{model.context_length}</span>
-                            {model.supported_modalities.map((modality) => (
-                              <span
-                                key={`${model.key}-${modality}`}
-                                className="message-chip is-modality"
-                              >
-                                {modality}
+                {isQuantizationMenuOpen ? (
+                  <div className="model-menu quantization-menu">
+                    <div className="model-menu-head">
+                      <div>
+                        <p className="section-label">Precision selector</p>
+                        <h2>Gemma 4 quantization</h2>
+                      </div>
+                    </div>
+
+                    <div className="model-menu-list">
+                      {quantizations.map((quantization) => {
+                        const isSelected =
+                          quantization.key === selectedQuantizationKey
+                        const isLoaded =
+                          health?.loaded &&
+                          activeModel?.key === selectedModelKey &&
+                          activeQuantization?.key === quantization.key
+                        const memoryEstimate = getModelMemoryEstimate(
+                          selectedModel,
+                          quantization.key,
+                        )
+
+                        return (
+                          <button
+                            key={quantization.key}
+                            className={`model-menu-item ${
+                              isSelected ? 'is-selected' : ''
+                            } ${isLoaded ? 'is-loaded' : ''}`}
+                            type="button"
+                            onClick={() => {
+                              setSelectedQuantizationKey(quantization.key)
+                              setIsQuantizationMenuOpen(false)
+                            }}
+                          >
+                            <div className="model-menu-row">
+                              <strong>{quantization.label}</strong>
+                              <span>
+                                {isLoaded
+                                  ? 'Loaded'
+                                  : getQuantizationRuntimeLabel(quantization)}
                               </span>
-                            ))}
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            <div className="model-picker" ref={quantizationPickerRef}>
-              <button
-                className="model-trigger"
-                type="button"
-                onClick={() => {
-                  setIsModelMenuOpen(false)
-                  setIsQuantizationMenuOpen((current) => !current)
-                }}
-              >
-                <span className="model-trigger-copy">
-                  <span className="model-trigger-label">Quantization</span>
-                  <strong>{selectedQuantization?.label || 'BF16'}</strong>
-                </span>
-                <span className="material-symbols-outlined">expand_more</span>
-              </button>
-
-              {isQuantizationMenuOpen ? (
-                <div className="model-menu quantization-menu">
-                  <div className="model-menu-head">
-                    <div>
-                      <p className="section-label">Precision selector</p>
-                      <h2>Gemma 4 quantization</h2>
-                    </div>
-
-                    <button
-                      className="ghost-action"
-                      type="button"
-                      onClick={handleLoadModel}
-                      disabled={
-                        isLoadingModel ||
-                        isSending ||
-                        isLiveSubmitting ||
-                        isLiveRecording ||
-                        !selectedModelKey ||
-                        !selectedQuantizationKey ||
-                        !quantizationRuntimeSupported
-                      }
-                    >
-                      {isLoadingModel ? 'Loading...' : 'Load selection'}
-                    </button>
-                  </div>
-
-                  <div className="model-menu-list">
-                    {quantizations.map((quantization) => {
-                      const isSelected =
-                        quantization.key === selectedQuantizationKey
-                      const isLoaded =
-                        health?.loaded &&
-                        activeModel?.key === selectedModelKey &&
-                        activeQuantization?.key === quantization.key
-                      const memoryEstimate = getModelMemoryEstimate(
-                        selectedModel,
-                        quantization.key,
-                      )
-
-                      return (
-                        <button
-                          key={quantization.key}
-                          className={`model-menu-item ${
-                            isSelected ? 'is-selected' : ''
-                          } ${isLoaded ? 'is-loaded' : ''}`}
-                          type="button"
-                          onClick={() => {
-                            setSelectedQuantizationKey(quantization.key)
-                            setIsQuantizationMenuOpen(false)
-                          }}
-                        >
-                          <div className="model-menu-row">
-                            <strong>{quantization.label}</strong>
-                            <span>{isLoaded ? 'Loaded' : getQuantizationRuntimeLabel(quantization)}</span>
-                          </div>
-                          <p>{quantization.doc_summary}</p>
-                          <div className="message-chip-row">
-                            <span className="message-chip">
-                              {quantization.precision_bits}-bit
-                            </span>
-                            {memoryEstimate ? (
+                            </div>
+                            <p>{quantization.doc_summary}</p>
+                            <div className="message-chip-row">
                               <span className="message-chip">
-                                Google est. {formatMemory(memoryEstimate)}
+                                {quantization.precision_bits}-bit
                               </span>
-                            ) : null}
-                            <span
-                              className={`message-chip ${
-                                quantization.runtime_supported ? 'is-modality' : ''
-                              }`}
-                            >
-                              {getQuantizationRuntimeLabel(quantization)}
-                            </span>
-                          </div>
-                        </button>
-                      )
-                    })}
+                              {memoryEstimate ? (
+                                <span className="message-chip">
+                                  Google est. {formatMemory(memoryEstimate)}
+                                </span>
+                              ) : null}
+                              <span
+                                className={`message-chip ${
+                                  quantization.runtime_supported ? 'is-modality' : ''
+                                }`}
+                              >
+                                {getQuantizationRuntimeLabel(quantization)}
+                              </span>
+                            </div>
+                          </button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
-              ) : null}
+                ) : null}
+              </div>
+
+              <button
+                className="topbar-load-button"
+                type="button"
+                onClick={handleLoadModel}
+                disabled={
+                  isModelLoading ||
+                  isSending ||
+                  isLiveSubmitting ||
+                  isLiveRecording ||
+                  !selectedModelKey ||
+                  !selectedQuantizationKey
+                }
+              >
+                <span className="material-symbols-outlined">
+                  {isModelLoading ? 'hourglass_top' : 'memory'}
+                </span>
+                <span>{isModelLoading ? 'Loading...' : 'Load model'}</span>
+              </button>
             </div>
 
             <button
@@ -1596,15 +1975,11 @@ function App() {
                 !supportsAudio ||
                 !quantizationRuntimeSupported ||
                 isSending ||
-                isLoadingModel ||
+                isModelLoading ||
                 viewMode === 'live'
               }
               title={
-                !quantizationRuntimeSupported
-                  ? 'This quantization is planning only in the current backend'
-                  : supportsAudio
-                  ? 'Attach audio'
-                  : 'Audio is only available on E2B and E4B'
+                audioAttachmentHint
               }
             >
               <span className="material-symbols-outlined">mic</span>
@@ -1620,10 +1995,43 @@ function App() {
           </div>
         </header>
 
+        {shouldShowLoadPanel ? (
+          <section className={`load-progress-panel is-${loadPanelState}`}>
+            <div className="load-progress-head">
+              <div>
+                <p className="section-label">Model loader</p>
+                <h2>{loadPanelHeadline}</h2>
+              </div>
+
+              <div className="load-progress-stats">
+                <strong>{Math.round(loadProgressValue)}%</strong>
+                <span>{loadStatusMeta}</span>
+              </div>
+            </div>
+
+            <div className="load-progress-track" aria-hidden="true">
+              <div
+                className="load-progress-fill"
+                style={{ width: `${Math.max(loadProgressValue, loadPanelState === 'failed' ? 6 : 0)}%` }}
+              />
+            </div>
+
+            <div className="load-progress-meta">
+              <span>{loadPanelMessage}</span>
+              <span>
+                Google est. {formatMemory(selectedMemoryEstimate)} |{' '}
+                {quantizationRuntimeSupported ? 'Runnable here' : 'Planning only'}
+              </span>
+            </div>
+          </section>
+        ) : null}
+
         {viewMode === 'text' ? (
           <>
-        <section className="conversation-stage">
-          {isSending || isLoadingModel ? <div className="stage-shimmer" /> : null}
+        <section
+          className={`conversation-stage ${shouldShowLoadPanel ? 'has-load-progress' : ''}`}
+        >
+          {isSending ? <div className="stage-shimmer" /> : null}
 
           <div className="conversation-scroll" ref={logRef}>
             <div className="mobile-rail">
@@ -1656,7 +2064,11 @@ function App() {
                 </h2>
                 <p>
                   Prompt text, image, and audio from a single local canvas.
-                  {supportsAudio
+                  {isLlamaCppRuntime
+                    ? ` ${selectedQuantization?.label || 'This quantization'} is currently routed through llama.cpp for fast local text chat in this app build.`
+                    : isWslVllmRuntime
+                    ? ` ${selectedModel?.label || 'This variant'} is currently routed through the experimental WSL vLLM bridge for Blackwell. Text and image are enabled here; video stays outside the current UI.`
+                    : supportsAudio
                     ? ` ${selectedModel?.label || 'This variant'} is currently unlocked for text, image, and audio.`
                     : ` ${selectedModel?.label || 'This variant'} is currently scoped to text and image according to the official modality tables.`}
                 </p>
@@ -1682,23 +2094,6 @@ function App() {
                     <p className="section-label">Selected variant</p>
                     <h3>{selectedModel?.label || 'Gemma 4'}</h3>
                   </div>
-
-                  <button
-                    className="ghost-action"
-                    type="button"
-                    onClick={handleLoadModel}
-                    disabled={
-                      isLoadingModel ||
-                      isSending ||
-                      isLiveSubmitting ||
-                      isLiveRecording ||
-                      !selectedModelKey ||
-                      !selectedQuantizationKey ||
-                      !quantizationRuntimeSupported
-                    }
-                  >
-                    {isLoadingModel ? 'Loading...' : 'Load model'}
-                  </button>
                 </div>
 
                 {selectedModel ? (
@@ -1749,11 +2144,17 @@ function App() {
                 </div>
 
                 <p className="hero-footnote">
-                  {modelSwitchPending
-                    ? `VRAM currently holds ${activeModel.label} in ${activeQuantization?.label || 'BF16'}. Load ${selectedModel?.label} / ${selectedQuantization?.label || 'BF16'} when you want to switch.`
-                    : quantizationRuntimeSupported
-                      ? `Google estimates about ${formatMemory(selectedMemoryEstimate)} for ${selectedModel?.label || 'this model'} in ${selectedQuantization?.label || 'BF16'}. ${docsNote}`
-                      : `${quantizationNote} ${selectedQuantization?.doc_summary || ''}`}
+                  {isModelLoading
+                    ? normalizedLoadState.message
+                    : normalizedLoadState.error
+                      ? normalizedLoadState.error
+                      : modelSwitchPending && health?.loaded
+                        ? `VRAM currently holds ${activeModel?.label || 'another model'} in ${activeQuantization?.label || 'BF16'}. Click Load model in the top bar when you want to switch.`
+                        : !health?.loaded
+                          ? `Nothing is warm in VRAM yet. Choose a model, choose a quantization, then click Load model in the top bar.`
+                          : quantizationRuntimeSupported
+                            ? `Google estimates about ${formatMemory(selectedMemoryEstimate)} for ${selectedModel?.label || 'this model'} in ${selectedQuantization?.label || 'BF16'}. ${docsNote}`
+                            : `${quantizationNote} ${selectedQuantization?.doc_summary || ''}`}
                 </p>
               </aside>
             </section>
@@ -1803,6 +2204,11 @@ function App() {
                       <div
                         className={`message-shell ${
                           message.role === 'user' ? 'user-bubble' : 'assistant-panel'
+                        } ${
+                          message.streamingState === 'waiting' ||
+                          message.streamingState === 'streaming'
+                            ? 'is-streaming'
+                            : ''
                         }`}
                       >
                         <div className="message-header">
@@ -1810,7 +2216,11 @@ function App() {
                             {message.role === 'user' ? 'You' : 'Gemma 4'}
                           </span>
                           <span className="message-time">
-                            {formatMessageTime(message.createdAt)}
+                            {message.streamingState === 'waiting'
+                              ? 'Preparing'
+                              : message.streamingState === 'streaming'
+                                ? 'Streaming'
+                                : formatMessageTime(message.createdAt)}
                           </span>
                         </div>
 
@@ -1825,7 +2235,19 @@ function App() {
                         ) : null}
 
                         <div className="message-copy">
-                          <p>{message.content}</p>
+                          {message.role === 'assistant' &&
+                          (message.streamingState === 'waiting' ||
+                            message.streamingState === 'streaming') ? (
+                            <div className="stream-status">
+                              <span className="stream-spinner" aria-hidden="true" />
+                              <span>
+                                {message.streamingState === 'waiting'
+                                  ? 'Model is preparing the first tokens...'
+                                  : 'Reply is streaming live.'}
+                              </span>
+                            </div>
+                          ) : null}
+                          {message.content ? <p>{message.content}</p> : null}
                         </div>
 
                         {message.thought ? (
@@ -1867,26 +2289,6 @@ function App() {
                 </div>
               )}
 
-              {isSending ? (
-                <article className="thread-message thread-message-assistant">
-                  <div className="message-brand">
-                    <div className="message-brand-icon">
-                      <span className="material-symbols-outlined">auto_awesome</span>
-                    </div>
-                    <span>Gemma 4 analysis</span>
-                  </div>
-
-                  <div className="message-shell assistant-panel is-loading">
-                    <div className="message-header">
-                      <span className="message-role">Gemma 4</span>
-                      <span className="message-time">Running</span>
-                    </div>
-                    <div className="message-copy">
-                      <p>The local model is processing the current request.</p>
-                    </div>
-                  </div>
-                </article>
-              ) : null}
             </section>
           </div>
         </section>
@@ -1941,7 +2343,7 @@ function App() {
                   className="dock-button"
                   type="button"
                   onClick={() => imageInputRef.current?.click()}
-                  disabled={!supportsImage || isSending || isLoadingModel}
+                  disabled={!supportsImage || isSending || isModelLoading}
                 >
                   <span className="material-symbols-outlined">image</span>
                 </button>
@@ -1950,12 +2352,8 @@ function App() {
                   className="dock-button"
                   type="button"
                   onClick={() => audioInputRef.current?.click()}
-                  disabled={!supportsAudio || isSending || isLoadingModel}
-                  title={
-                    supportsAudio
-                      ? 'Attach audio'
-                      : 'Audio is only available on E2B and E4B'
-                  }
+                  disabled={!supportsAudio || isSending || isModelLoading}
+                  title={audioAttachmentHint}
                 >
                   <span className="material-symbols-outlined">mic</span>
                 </button>
@@ -1996,11 +2394,13 @@ function App() {
                 <button
                   className="send-button"
                   type="submit"
-                  disabled={
-                    isSending || isLoadingModel || !quantizationRuntimeSupported
-                  }
+                  disabled={isSending || !canSendTurns}
                 >
-                  <span className="material-symbols-outlined">arrow_upward</span>
+                  {isSending ? (
+                    <span className="button-spinner" aria-hidden="true" />
+                  ) : (
+                    <span className="material-symbols-outlined">arrow_upward</span>
+                  )}
                 </button>
               </div>
             </div>
@@ -2037,8 +2437,11 @@ function App() {
         </footer>
           </>
         ) : (
-          <section className="live-stage" ref={liveStageRef}>
-            {isLiveSubmitting || isLiveRecording || isLoadingModel ? (
+          <section
+            className={`live-stage ${shouldShowLoadPanel ? 'has-load-progress' : ''}`}
+            ref={liveStageRef}
+          >
+            {isLiveSubmitting || isLiveRecording ? (
               <div className="stage-shimmer live-stage-shimmer" />
             ) : null}
 
@@ -2168,8 +2571,9 @@ function App() {
                     }
                     disabled={
                       isLiveSubmitting ||
-                      isLoadingModel ||
+                      isModelLoading ||
                       !supportsNativeLiveAudio
+                      || !selectedModelLoaded
                     }
                   >
                     <span className="material-symbols-outlined">
@@ -2184,7 +2588,8 @@ function App() {
                     onClick={handleSendLiveFrame}
                     disabled={
                       isLiveSubmitting ||
-                      isLoadingModel ||
+                      isModelLoading ||
+                      !selectedModelLoaded ||
                       !quantizationRuntimeSupported
                     }
                   >

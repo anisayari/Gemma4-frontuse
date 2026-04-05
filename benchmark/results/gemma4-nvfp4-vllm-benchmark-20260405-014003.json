@@ -1,0 +1,21 @@
+{
+  "timestamp_utc": "2026-04-04T23:40:03.581485+00:00",
+  "model_id": "nvidia/Gemma-4-31B-IT-NVFP4",
+  "runtime": "vllm",
+  "quantization": "modelopt_fp4",
+  "status": "ok",
+  "platform": "WSL Ubuntu",
+  "config": {
+    "max_model_len": 256,
+    "gpu_memory_utilization": 0.94,
+    "temperature": 0.0,
+    "max_tokens": 64,
+    "enforce_eager": true,
+    "cpu_offload_gb": 0.0
+  },
+  "load_seconds": 321.9977,
+  "elapsed_seconds": 8.2037,
+  "generated_tokens": 64,
+  "tokens_per_second": 7.8,
+  "text_preview": "Local multimodal inference throughput is critical for a workstation copilot to ensure **low-latency interactivity** and **real-time synchronization** between the user's visual context (screen state, camera feed) and the LLM's reasoning. High throughput minimizes the \"time-to-first-token\" and total processing"
+}
