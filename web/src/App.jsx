@@ -7,10 +7,15 @@ import './App.css'
 const DEFAULT_MODEL_KEY = 'e4b'
 const DEFAULT_QUANTIZATION_KEY = 'bf16'
 const DEFAULT_MAX_NEW_TOKENS = 512
+const WORKSPACE_STORAGE_KEY = 'gemma4-lab-workspace-v1'
 const DEFAULT_SYSTEM_PROMPT =
   'You are Gemma 4 running locally on a workstation. Be concise, technical, and explicit about what can be inferred from the provided media.'
 const CONTINUATION_PROMPT =
   'Continue exactly where your previous answer stopped. Do not restart, summarize, apologize, or repeat any text you already produced. Output only the missing continuation.'
+const TITLE_SYSTEM_PROMPT =
+  'You generate short conversation titles for a local AI chat app. Return plain text only, 2 to 6 words, no quotes, no markdown, no trailing punctuation.'
+const TITLE_PROMPT =
+  'Write the best short title for this conversation.'
 const AUTO_CONTINUE_LIMIT = 3
 
 const PROMPT_PRESETS = [
@@ -486,6 +491,28 @@ function makeThreadTitle(prompt, imageFile, audioFile) {
   return 'New Chat'
 }
 
+function normalizeGeneratedTitle(rawTitle, fallbackTitle) {
+  const singleLine = String(rawTitle || '')
+    .replace(/\[(.*?)\]\((.*?)\)/g, '$1')
+    .replace(/[*_`>#]+/g, ' ')
+    .replace(/^title\s*:\s*/i, '')
+    .split(/\r?\n/)[0]
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[.,;:!?-]+$/g, '')
+
+  if (!singleLine) {
+    return fallbackTitle
+  }
+
+  const words = singleLine.split(/\s+/).slice(0, 8).join(' ')
+  if (!words) {
+    return fallbackTitle
+  }
+
+  return words.length > 64 ? `${words.slice(0, 64).trimEnd()}...` : words
+}
+
 function createThread(title) {
   const now = Date.now()
   return {
@@ -497,11 +524,93 @@ function createThread(title) {
   }
 }
 
+function normalizeStoredMessage(message) {
+  if (!message || typeof message !== 'object') {
+    return null
+  }
+
+  return {
+    ...message,
+    streamingState:
+      message.streamingState === 'waiting' || message.streamingState === 'streaming'
+        ? 'done'
+        : message.streamingState,
+  }
+}
+
+function restoreWorkspace() {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const raw = window.localStorage.getItem(WORKSPACE_STORAGE_KEY)
+    if (!raw) {
+      return null
+    }
+
+    const parsed = JSON.parse(raw)
+    const restoredThreads = Array.isArray(parsed?.threads)
+      ? parsed.threads
+          .map((thread) => {
+            if (!thread || typeof thread !== 'object' || !thread.id) {
+              return null
+            }
+
+            const restoredMessages = Array.isArray(thread.messages)
+              ? thread.messages.map(normalizeStoredMessage).filter(Boolean)
+              : []
+
+            return {
+              ...thread,
+              title: typeof thread.title === 'string' && thread.title.trim() ? thread.title : 'New Chat',
+              updatedAt: Number(thread.updatedAt) || Date.now(),
+              createdAt: Number(thread.createdAt) || Date.now(),
+              messages: restoredMessages,
+            }
+          })
+          .filter(Boolean)
+      : []
+
+    if (restoredThreads.length === 0) {
+      return null
+    }
+
+    const activeThreadId = restoredThreads.some((thread) => thread.id === parsed?.activeThreadId)
+      ? parsed.activeThreadId
+      : restoredThreads[0].id
+
+    return {
+      threads: restoredThreads,
+      activeThreadId,
+    }
+  } catch {
+    return null
+  }
+}
+
 function createInitialWorkspace() {
+  const restoredWorkspace = restoreWorkspace()
+  if (restoredWorkspace) {
+    return restoredWorkspace
+  }
+
   const firstThread = createThread('New Chat')
   return {
     threads: [firstThread],
     activeThreadId: firstThread.id,
+  }
+}
+
+function persistWorkspace(workspace) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify(workspace))
+  } catch {
+    // Best-effort persistence only.
   }
 }
 
@@ -934,6 +1043,13 @@ function App() {
     quantizationRuntimeSupported
 
   useEffect(() => {
+    persistWorkspace({
+      threads,
+      activeThreadId,
+    })
+  }, [threads, activeThreadId])
+
+  useEffect(() => {
     if (!imageFile) {
       setImagePreview('')
       return
@@ -1323,6 +1439,8 @@ function App() {
     const setBusy = mode === 'live' ? setIsLiveSubmitting : setIsSending
     setBusy(true)
     setError('')
+    const shouldGenerateThreadTitle = mode === 'text' && messages.length === 0
+    const fallbackThreadTitle = titleHint || makeThreadTitle(visibleText, imageAsset, audioAsset)
 
     if (mode === 'live') {
       setLiveError('')
@@ -1357,7 +1475,7 @@ function App() {
           ...thread,
           title:
             thread.messages.length === 0
-              ? titleHint || makeThreadTitle(visibleText, imageAsset, audioAsset)
+              ? fallbackThreadTitle
               : thread.title,
           updatedAt: Date.now(),
           messages: [...thread.messages, pendingUserMessage, pendingAssistantMessage],
@@ -1480,6 +1598,15 @@ function App() {
         if (autoContinuedMessage) {
           assistantMessage = autoContinuedMessage
         }
+      }
+
+      if (shouldGenerateThreadTitle) {
+        void generateThreadTitle({
+          threadId,
+          fallbackTitle: fallbackThreadTitle,
+          userMessage: pendingUserMessage,
+          assistantMessage,
+        })
       }
 
       if (mode === 'live') {
@@ -1718,6 +1845,72 @@ function App() {
       if (manageBusyState) {
         setIsSending(false)
       }
+    }
+  }
+
+  async function generateThreadTitle({
+    threadId,
+    fallbackTitle,
+    userMessage,
+    assistantMessage,
+  }) {
+    const modelKey = assistantMessage.meta?.active_model_key || selectedModelKey
+    const quantizationKey =
+      assistantMessage.meta?.active_quantization_key || selectedQuantizationKey
+
+    const formData = new FormData()
+    formData.set('model_key', modelKey)
+    formData.set('quantization_key', quantizationKey)
+    formData.set('prompt', TITLE_PROMPT)
+    formData.set('system_prompt', TITLE_SYSTEM_PROMPT)
+    formData.set(
+      'history_json',
+      JSON.stringify(
+        serializeHistoryMessages([
+          {
+            role: userMessage.role,
+            content: userMessage.content,
+          },
+          {
+            role: assistantMessage.role,
+            content: assistantMessage.content,
+          },
+        ]),
+      ),
+    )
+    formData.set('max_new_tokens', '16')
+    formData.set('temperature', '0.2')
+    formData.set('top_p', '0.9')
+    formData.set('top_k', '32')
+    formData.set('thinking', 'false')
+    formData.set('tts_enabled', 'false')
+
+    try {
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        return
+      }
+
+      const data = await parseApiPayload(response)
+      const nextTitle = normalizeGeneratedTitle(data.reply, fallbackTitle)
+      if (!nextTitle) {
+        return
+      }
+
+      startTransition(() => {
+        setThreads((current) =>
+          updateThreadInList(current, threadId, (thread) => ({
+            ...thread,
+            title: nextTitle,
+          })),
+        )
+      })
+    } catch {
+      // Keep the fallback title if the background title pass fails.
     }
   }
 
