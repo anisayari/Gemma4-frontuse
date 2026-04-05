@@ -563,6 +563,58 @@ def hf_cache_repo_dir(repo_id: str, *, use_hub: bool = False) -> Path:
     return cache_root / f"models--{repo_id.replace('/', '--')}"
 
 
+def get_listening_pids_for_port(port: int) -> set[int]:
+    try:
+        result = subprocess.run(
+            ["netstat", "-ano", "-p", "tcp"],
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except Exception:
+        logger.exception("Failed to inspect TCP listeners for port=%s", port)
+        return set()
+
+    stdout_text = result.stdout or ""
+    pids: set[int] = set()
+    needle = f":{port}"
+    for line in stdout_text.splitlines():
+        if needle not in line or "LISTENING" not in line:
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        local_address = parts[1]
+        state = parts[3]
+        pid_text = parts[4]
+        if not local_address.endswith(needle) or state != "LISTENING":
+            continue
+        try:
+            pids.add(int(pid_text))
+        except ValueError:
+            continue
+    return pids
+
+
+def kill_process_ids(pids: set[int], *, exclude_pid: int | None = None) -> None:
+    for pid in sorted(pids):
+        if exclude_pid is not None and pid == exclude_pid:
+            continue
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                cwd=str(BASE_DIR),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except Exception:
+            logger.exception("Failed to terminate stale process pid=%s", pid)
+
+
 def ensure_llama_cpp_repo_cache(repo_id: str) -> None:
     direct_repo_dir = hf_cache_repo_dir(repo_id)
     hub_repo_dir = hf_cache_repo_dir(repo_id, use_hub=True)
@@ -734,6 +786,9 @@ class LlamaCppServerRuntime:
         self._current_model_key: str | None = None
         self._current_quantization_key: str | None = None
 
+    def _cleanup_stale_processes(self, *, exclude_pid: int | None = None) -> None:
+        kill_process_ids(get_listening_pids_for_port(LLAMA_SERVER_PORT), exclude_pid=exclude_pid)
+
     @property
     def is_loaded(self) -> bool:
         return (
@@ -767,6 +822,8 @@ class LlamaCppServerRuntime:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=5)
+
+        self._cleanup_stale_processes()
 
     def _runtime_hf_label(self, quantization_spec: dict) -> str:
         return str(quantization_spec.get("hf_file_label", quantization_spec["label"]))
@@ -860,6 +917,7 @@ class LlamaCppServerRuntime:
 
         emit(32, "Releasing the previous quantized runtime...")
         self.unload()
+        self._cleanup_stale_processes()
         command = self._build_command(spec, quantization_spec)
         emit(48, "Launching llama.cpp server...")
         env = dict(os.environ)
@@ -1734,8 +1792,53 @@ class GemmaService:
             return dict(self._load_state)
 
     def get_load_state(self) -> dict:
+        self._reconcile_runtime_state()
         with self._load_state_lock:
             return dict(self._load_state)
+
+    def _reconcile_runtime_state(self) -> None:
+        stale_runtime = None
+        if self._runtime_family == "llama.cpp" and not self._llama_cpp_runtime.is_loaded:
+            stale_runtime = "llama.cpp"
+        elif self._runtime_family == "vllm-wsl" and not self._wsl_vllm_runtime.is_loaded:
+            stale_runtime = "vllm-wsl"
+        elif self._runtime_family == "transformers" and (
+            self._processor is None or self._model is None
+        ):
+            stale_runtime = "transformers"
+
+        if stale_runtime is None:
+            return
+
+        stale_model_key = self._current_model_key
+        stale_quantization_key = self._current_quantization_key
+        with self._load_state_lock:
+            current_state = dict(self._load_state)
+
+        self._unload_current_model()
+
+        if (
+            current_state.get("status") == "loaded"
+            and stale_model_key is not None
+            and stale_quantization_key is not None
+        ):
+            runtime_label = {
+                "llama.cpp": "The llama.cpp runtime",
+                "vllm-wsl": "The WSL vLLM runtime",
+                "transformers": "The Transformers runtime",
+            }.get(stale_runtime, "The model runtime")
+            self._set_load_state(
+                status="failed",
+                progress=100,
+                message="Model runtime stopped.",
+                target_model_key=stale_model_key,
+                target_quantization_key=stale_quantization_key,
+                error=(
+                    f"{runtime_label} exited after the load completed. Click Load model to "
+                    "retry. If it keeps happening, free GPU memory or pick a lighter "
+                    "quantization."
+                ),
+            )
 
     def _unload_current_model(self) -> None:
         self._llama_cpp_runtime.unload()
@@ -2087,6 +2190,7 @@ class GemmaService:
                 self._load_thread = None
 
     def start_load(self, model_key: str | None, quantization_key: str | None) -> dict:
+        self._reconcile_runtime_state()
         spec = get_model_spec(model_key)
         quantization_spec = get_quantization_spec(quantization_key)
 
@@ -2168,6 +2272,7 @@ class GemmaService:
     def require_loaded_selection(
         self, model_key: str | None, quantization_key: str | None
     ) -> tuple[object, object, dict, dict]:
+        self._reconcile_runtime_state()
         spec = get_model_spec(model_key)
         quantization_spec = get_quantization_spec(quantization_key)
         load_state = self.get_load_state()
@@ -2210,6 +2315,7 @@ class GemmaService:
         return self._processor, self._model, spec, quantization_spec
 
     def health(self) -> dict:
+        self._reconcile_runtime_state()
         active_spec = None
         active_quantization = None
         if self.is_loaded:
