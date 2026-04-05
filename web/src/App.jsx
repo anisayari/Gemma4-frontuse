@@ -1234,11 +1234,28 @@ function App() {
       return
     }
 
-    logRef.current.scrollTo({
-      top: logRef.current.scrollHeight,
-      behavior: 'smooth',
+    const scrollBehavior =
+      latestAssistantTurn?.streamingState === 'waiting' ||
+      latestAssistantTurn?.streamingState === 'streaming'
+        ? 'auto'
+        : 'smooth'
+
+    const animationFrame = window.requestAnimationFrame(() => {
+      logRef.current?.scrollTo({
+        top: logRef.current.scrollHeight,
+        behavior: scrollBehavior,
+      })
     })
-  }, [messages.length, isSending, activeThreadId])
+
+    return () => window.cancelAnimationFrame(animationFrame)
+  }, [
+    messages.length,
+    isSending,
+    activeThreadId,
+    latestAssistantTurn?.id,
+    latestAssistantTurn?.streamingState,
+    latestAssistantTurn?.content,
+  ])
 
   useEffect(() => {
     function handlePointerDown(event) {
