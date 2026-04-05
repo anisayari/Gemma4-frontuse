@@ -206,6 +206,10 @@ Quick read:
 
 ![Gemma 4 API latency graph](benchmark/results/gemma4-api-loadtest-latency-latest.svg)
 
+### API latency graph without 31B
+
+![Gemma 4 API latency graph without 31B](benchmark/results/gemma4-api-loadtest-latency-no-31b-latest.svg)
+
 ### API parallel graph
 
 ![Gemma 4 API parallel graph](benchmark/results/gemma4-api-loadtest-parallel-latest.svg)

@@ -1473,6 +1473,7 @@
   "artifacts": {
     "markdown": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-20260405-153459.md",
     "bubble_svg": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-latency-20260405-153459.svg",
-    "parallel_svg": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-parallel-20260405-153459.svg"
+    "parallel_svg": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-parallel-20260405-153459.svg",
+    "bubble_zoom_svg": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-latency-no-31b-20260405-153459.svg"
   }
 }

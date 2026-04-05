@@ -247,10 +247,12 @@ def model_color(label):
     return palette[abs(hash(label)) % len(palette)]
 
 
-def build_latency_svg(results, output_path):
+def build_latency_svg(results, output_path, *, exclude_31b=False):
     rows = []
     for item in results:
         if not item.get("load", {}).get("ok"):
+            continue
+        if exclude_31b and "31B" in item["label"]:
             continue
         for workload in item.get("workloads", []):
             if workload.get("ok"):
@@ -287,8 +289,16 @@ def build_latency_svg(results, output_path):
         "<style>.bg{fill:#08101f}.panel{fill:#0f1930}.grid{stroke:#2b3550;stroke-width:1;opacity:.7}.axis{stroke:#8aa5d6;stroke-width:2}.title{fill:#dee5ff;font:800 28px Manrope,Inter,Arial,sans-serif}.text{fill:#dee5ff;font:14px Inter,Arial,sans-serif}.muted{fill:#a3aac4;font:12px Inter,Arial,sans-serif}.line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}</style>",
         f"<rect class='bg' x='0' y='0' width='{width}' height='{height}' rx='24' />",
         f"<rect class='panel' x='30' y='30' width='{width-60}' height='{height-60}' rx='24' />",
-        "<text class='title' x='60' y='78'>API latency by input size</text>",
-        "<text class='muted' x='60' y='104'>One line per model/runtime. Markers show short, medium, and long prompts.</text>",
+        (
+            "<text class='title' x='60' y='78'>API latency by input size (without 31B)</text>"
+            if exclude_31b
+            else "<text class='title' x='60' y='78'>API latency by input size</text>"
+        ),
+        (
+            "<text class='muted' x='60' y='104'>Zoom view without 31B lines. Markers show short, medium, and long prompts.</text>"
+            if exclude_31b
+            else "<text class='muted' x='60' y='104'>One line per model/runtime. Markers show short, medium, and long prompts.</text>"
+        ),
     ]
     for step in range(6):
         x = ml + (pw / 5) * step
@@ -407,7 +417,7 @@ def build_audio_probe(session, base_url):
     }
 
 
-def build_report(results, parallel_results, audio_probe, bubble_svg_path, parallel_svg_path):
+def build_report(results, parallel_results, audio_probe, bubble_svg_path, parallel_svg_path, bubble_zoom_svg_path=None):
     passed = [item for item in results if item.get("load", {}).get("ok")]
     failed = [item for item in results if not item.get("load", {}).get("ok")]
     lines = [
@@ -455,6 +465,8 @@ def build_report(results, parallel_results, audio_probe, bubble_svg_path, parall
                     f"{workload.get('completion_tokens') or '-'} | {workload.get('finish_reason') or '-'} |"
                 )
         lines += ["", "## Latency graph", "", f"![API latency line chart]({bubble_svg_path.name})"]
+        if bubble_zoom_svg_path is not None:
+            lines += ["", "## Latency graph without 31B", "", f"![API latency line chart without 31B]({bubble_zoom_svg_path.name})"]
     if parallel_results:
         lines += [
             "",
@@ -492,6 +504,7 @@ def main():
     json_path = RESULTS_DIR / f"gemma4-api-loadtest-{timestamp}.json"
     md_path = RESULTS_DIR / f"gemma4-api-loadtest-{timestamp}.md"
     bubble_svg_path = RESULTS_DIR / f"gemma4-api-loadtest-latency-{timestamp}.svg"
+    bubble_zoom_svg_path = RESULTS_DIR / f"gemma4-api-loadtest-latency-no-31b-{timestamp}.svg"
     parallel_svg_path = RESULTS_DIR / f"gemma4-api-loadtest-parallel-{timestamp}.svg"
     session = requests.Session()
     results = []
@@ -556,6 +569,7 @@ def main():
             parallel_results.append({"label": label, "concurrent_requests": concurrent_requests, "makespan_seconds": batch["makespan_seconds"], "avg_latency_seconds": batch["avg_latency_seconds"], "max_latency_seconds": batch["max_latency_seconds"], "effective_parallelism": effective})
     audio_probe = build_audio_probe(session, base_url)
     build_latency_svg(results, bubble_svg_path)
+    build_latency_svg(results, bubble_zoom_svg_path, exclude_31b=True)
     build_parallel_svg(parallel_results, parallel_svg_path)
     report = {
         "generated_at": datetime.now().isoformat(),
@@ -563,20 +577,37 @@ def main():
         "results": results,
         "parallel_results": parallel_results,
         "audio_probe": audio_probe,
-        "artifacts": {"markdown": str(md_path), "bubble_svg": str(bubble_svg_path), "parallel_svg": str(parallel_svg_path)},
+        "artifacts": {
+            "markdown": str(md_path),
+            "bubble_svg": str(bubble_svg_path),
+            "bubble_zoom_svg": str(bubble_zoom_svg_path),
+            "parallel_svg": str(parallel_svg_path),
+        },
     }
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(build_report(results, parallel_results, audio_probe, bubble_svg_path, parallel_svg_path), encoding="utf-8")
+    md_path.write_text(
+        build_report(
+            results,
+            parallel_results,
+            audio_probe,
+            bubble_svg_path,
+            parallel_svg_path,
+            bubble_zoom_svg_path,
+        ),
+        encoding="utf-8",
+    )
     for src_name, dst_name in [
         (json_path, RESULTS_DIR / "gemma4-api-loadtest-latest.json"),
         (md_path, RESULTS_DIR / "gemma4-api-loadtest-latest.md"),
         (bubble_svg_path, RESULTS_DIR / "gemma4-api-loadtest-latency-latest.svg"),
+        (bubble_zoom_svg_path, RESULTS_DIR / "gemma4-api-loadtest-latency-no-31b-latest.svg"),
         (parallel_svg_path, RESULTS_DIR / "gemma4-api-loadtest-parallel-latest.svg"),
     ]:
         dst_name.write_text(src_name.read_text(encoding="utf-8"), encoding="utf-8")
     print(f"\\nWrote {json_path}")
     print(f"Wrote {md_path}")
     print(f"Wrote {bubble_svg_path}")
+    print(f"Wrote {bubble_zoom_svg_path}")
     print(f"Wrote {parallel_svg_path}")
 
 

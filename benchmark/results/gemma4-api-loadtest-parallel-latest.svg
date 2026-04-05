@@ -19,24 +19,24 @@
 <line class='axis' x1='90' y1='530' x2='1080' y2='530' />
 <line class='axis' x1='90' y1='90' x2='90' y2='530' />
 <text class='text' x='247.0' y='560'>1</text>
-<rect x='185.0' y='430.6' width='62.0' height='99.4' fill='#c3e88d' rx='8' />
+<rect x='185.0' y='430.6' width='62.0' height='99.4' fill='#82aaff' rx='8' />
 <text class='muted' x='185.0' y='422.6'>0.69</text>
-<rect x='255.0' y='398.6' width='62.0' height='131.4' fill='#ffb86c' rx='8' />
+<rect x='255.0' y='398.6' width='62.0' height='131.4' fill='#88adff' rx='8' />
 <text class='muted' x='255.0' y='390.6'>0.912</text>
 <text class='text' x='577.0' y='560'>2</text>
-<rect x='515.0' y='369.1' width='62.0' height='160.9' fill='#c3e88d' rx='8' />
+<rect x='515.0' y='369.1' width='62.0' height='160.9' fill='#82aaff' rx='8' />
 <text class='muted' x='515.0' y='361.1'>1.117</text>
-<rect x='585.0' y='307.5' width='62.0' height='222.5' fill='#ffb86c' rx='8' />
+<rect x='585.0' y='307.5' width='62.0' height='222.5' fill='#88adff' rx='8' />
 <text class='muted' x='585.0' y='299.5'>1.545</text>
 <text class='text' x='907.0' y='560'>4</text>
-<rect x='845.0' y='209.0' width='62.0' height='321.0' fill='#c3e88d' rx='8' />
+<rect x='845.0' y='209.0' width='62.0' height='321.0' fill='#82aaff' rx='8' />
 <text class='muted' x='845.0' y='201.0'>2.229</text>
-<rect x='915.0' y='90.0' width='62.0' height='440.0' fill='#ffb86c' rx='8' />
+<rect x='915.0' y='90.0' width='62.0' height='440.0' fill='#88adff' rx='8' />
 <text class='muted' x='915.0' y='82.0'>3.055</text>
 <text class='text' x='510.0' y='588'>Concurrent requests</text>
 <text class='text' transform='translate(24,355.0) rotate(-90)'>Batch makespan (s)</text>
-<circle cx='940' cy='114' r='7' fill='#c3e88d' />
+<circle cx='940' cy='114' r='7' fill='#82aaff' />
 <text class='text' x='955' y='118'>Gemma 4 E2B / SFP8</text>
-<circle cx='940' cy='138' r='7' fill='#ffb86c' />
+<circle cx='940' cy='138' r='7' fill='#88adff' />
 <text class='text' x='955' y='142'>Gemma 4 26B A4B / SFP8</text>
 </svg>

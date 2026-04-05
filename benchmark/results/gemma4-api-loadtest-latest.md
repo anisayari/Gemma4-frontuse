@@ -1,6 +1,6 @@
 # API Load Test
 
-Generated on 2026-04-05 16:09:07.
+Generated on 2026-04-05 16:15:37.
 
 ## Why audio is rejected on the current quantized runtime
 
@@ -53,6 +53,10 @@ Generated on 2026-04-05 16:09:07.
 ## Latency graph
 
 ![API latency line chart](gemma4-api-loadtest-latency-20260405-153459.svg)
+
+## Latency graph without 31B
+
+![API latency line chart without 31B](gemma4-api-loadtest-latency-no-31b-20260405-153459.svg)
 
 ## Parallel request test
 
