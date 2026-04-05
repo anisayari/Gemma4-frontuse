@@ -271,21 +271,24 @@ def build_latency_svg(results, output_path):
     pw, ph = width - ml - mr, height - mt - mb
     max_input = max(row["input_chars"] for row in rows)
     max_latency = max(row["total_seconds"] for row in rows)
-    max_output = max(row["output_chars"] for row in rows)
     sx = lambda value: ml + (value / max_input) * pw
     sy = lambda value: mt + ph - (value / max_latency) * ph
-    sr = lambda value: 8 + (math.sqrt(max(value, 1)) / math.sqrt(max_output)) * 22
     labels = []
     for row in rows:
         if row["label"] not in labels:
             labels.append(row["label"])
+    series = {}
+    for row in rows:
+        series.setdefault(row["label"], []).append(row)
+    for label in series:
+        series[label] = sorted(series[label], key=lambda item: item["input_chars"])
     svg = [
         f"<svg viewBox='0 0 {width} {height}' width='{width}' height='{height}' xmlns='http://www.w3.org/2000/svg'>",
-        "<style>.bg{fill:#08101f}.panel{fill:#0f1930}.grid{stroke:#2b3550;stroke-width:1;opacity:.7}.axis{stroke:#8aa5d6;stroke-width:2}.title{fill:#dee5ff;font:800 28px Manrope,Inter,Arial,sans-serif}.text{fill:#dee5ff;font:14px Inter,Arial,sans-serif}.muted{fill:#a3aac4;font:12px Inter,Arial,sans-serif}</style>",
+        "<style>.bg{fill:#08101f}.panel{fill:#0f1930}.grid{stroke:#2b3550;stroke-width:1;opacity:.7}.axis{stroke:#8aa5d6;stroke-width:2}.title{fill:#dee5ff;font:800 28px Manrope,Inter,Arial,sans-serif}.text{fill:#dee5ff;font:14px Inter,Arial,sans-serif}.muted{fill:#a3aac4;font:12px Inter,Arial,sans-serif}.line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}</style>",
         f"<rect class='bg' x='0' y='0' width='{width}' height='{height}' rx='24' />",
         f"<rect class='panel' x='30' y='30' width='{width-60}' height='{height-60}' rx='24' />",
-        "<text class='title' x='60' y='78'>API latency by input size and response size</text>",
-        "<text class='muted' x='60' y='104'>X = prompt chars | Y = total latency (s) | bubble size = output chars</text>",
+        "<text class='title' x='60' y='78'>API latency by input size</text>",
+        "<text class='muted' x='60' y='104'>One line per model/runtime. Markers show short, medium, and long prompts.</text>",
     ]
     for step in range(6):
         x = ml + (pw / 5) * step
@@ -298,16 +301,22 @@ def build_latency_svg(results, output_path):
     svg.append(f"<line class='axis' x1='{ml}' y1='{mt}' x2='{ml}' y2='{mt+ph}' />")
     svg.append(f"<text class='text' x='{ml + pw/2 - 70:.1f}' y='{height-32}'>Prompt length (chars)</text>")
     svg.append(f"<text class='text' transform='translate(24,{mt + ph/2 + 50:.1f}) rotate(-90)'>Total latency (s)</text>")
-    for row in rows:
-        color = model_color(row["label"])
-        cx, cy, radius = sx(row["input_chars"]), sy(row["total_seconds"]), sr(row["output_chars"])
-        svg.append(f"<circle cx='{cx:.1f}' cy='{cy:.1f}' r='{radius:.1f}' fill='{color}' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />")
-        svg.append(f"<text class='muted' x='{cx + radius + 6:.1f}' y='{cy + 4:.1f}'>{row['workload'][0].upper()}</text>")
+    for label, items in series.items():
+        color = model_color(label)
+        points = " ".join(f"{sx(item['input_chars']):.1f},{sy(item['total_seconds']):.1f}" for item in items)
+        svg.append(f"<polyline class='line' points='{points}' stroke='{color}' />")
+        for item in items:
+            cx = sx(item["input_chars"])
+            cy = sy(item["total_seconds"])
+            svg.append(f"<circle cx='{cx:.1f}' cy='{cy:.1f}' r='5.5' fill='{color}' stroke='#f6f8ff' stroke-width='1.4' />")
+            svg.append(f"<text class='muted' x='{cx + 8:.1f}' y='{cy - 8:.1f}'>{item['workload'][0].upper()}</text>")
     legend_y = mt + 20
     for index, label in enumerate(labels):
         y = legend_y + index * 26
-        svg.append(f"<circle cx='{width-270}' cy='{y}' r='7' fill='{model_color(label)}' />")
-        svg.append(f"<text class='text' x='{width-255}' y='{y+4}'>{label}</text>")
+        color = model_color(label)
+        svg.append(f"<line x1='{width-282}' y1='{y}' x2='{width-258}' y2='{y}' stroke='{color}' stroke-width='3' stroke-linecap='round' />")
+        svg.append(f"<circle cx='{width-270}' cy='{y}' r='4.5' fill='{color}' stroke='#f6f8ff' stroke-width='1.1' />")
+        svg.append(f"<text class='text' x='{width-245}' y='{y+4}'>{label}</text>")
     svg.append("</svg>")
     output_path.write_text("\n".join(svg), encoding="utf-8")
 
@@ -445,7 +454,7 @@ def build_report(results, parallel_results, audio_probe, bubble_svg_path, parall
                     f"{workload['ttft_seconds']} | {workload['total_seconds']} | {workload['output_chars']} | "
                     f"{workload.get('completion_tokens') or '-'} | {workload.get('finish_reason') or '-'} |"
                 )
-        lines += ["", "## Latency graph", "", f"![API latency bubble chart]({bubble_svg_path.name})"]
+        lines += ["", "## Latency graph", "", f"![API latency line chart]({bubble_svg_path.name})"]
     if parallel_results:
         lines += [
             "",

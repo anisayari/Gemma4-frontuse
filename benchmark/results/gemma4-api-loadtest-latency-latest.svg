@@ -1,9 +1,9 @@
 <svg viewBox='0 0 1200 760' width='1200' height='760' xmlns='http://www.w3.org/2000/svg'>
-<style>.bg{fill:#08101f}.panel{fill:#0f1930}.grid{stroke:#2b3550;stroke-width:1;opacity:.7}.axis{stroke:#8aa5d6;stroke-width:2}.title{fill:#dee5ff;font:800 28px Manrope,Inter,Arial,sans-serif}.text{fill:#dee5ff;font:14px Inter,Arial,sans-serif}.muted{fill:#a3aac4;font:12px Inter,Arial,sans-serif}</style>
+<style>.bg{fill:#08101f}.panel{fill:#0f1930}.grid{stroke:#2b3550;stroke-width:1;opacity:.7}.axis{stroke:#8aa5d6;stroke-width:2}.title{fill:#dee5ff;font:800 28px Manrope,Inter,Arial,sans-serif}.text{fill:#dee5ff;font:14px Inter,Arial,sans-serif}.muted{fill:#a3aac4;font:12px Inter,Arial,sans-serif}.line{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}</style>
 <rect class='bg' x='0' y='0' width='1200' height='760' rx='24' />
 <rect class='panel' x='30' y='30' width='1140' height='700' rx='24' />
-<text class='title' x='60' y='78'>API latency by input size and response size</text>
-<text class='muted' x='60' y='104'>X = prompt chars | Y = total latency (s) | bubble size = output chars</text>
+<text class='title' x='60' y='78'>API latency by input size</text>
+<text class='muted' x='60' y='104'>One line per model/runtime. Markers show short, medium, and long prompts.</text>
 <line class='grid' x1='90.0' y1='90' x2='90.0' y2='670' />
 <line class='grid' x1='90' y1='90.0' x2='880' y2='90.0' />
 <text class='muted' x='80.0' y='698.0'>0</text>
@@ -32,68 +32,84 @@
 <line class='axis' x1='90' y1='90' x2='90' y2='670' />
 <text class='text' x='415.0' y='728'>Prompt length (chars)</text>
 <text class='text' transform='translate(24,430.0) rotate(-90)'>Total latency (s)</text>
-<circle cx='299.1' cy='664.1' r='19.0' fill='#4fd1c5' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='324.1' y='668.1'>S</text>
-<circle cx='563.0' cy='656.1' r='26.3' fill='#4fd1c5' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='595.3' y='660.1'>M</text>
-<circle cx='880.0' cy='649.4' r='29.2' fill='#4fd1c5' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='915.2' y='653.4'>L</text>
-<circle cx='299.1' cy='662.2' r='18.4' fill='#a6accd' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='323.5' y='666.2'>S</text>
-<circle cx='563.0' cy='655.9' r='25.6' fill='#a6accd' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='594.6' y='659.9'>M</text>
-<circle cx='880.0' cy='649.6' r='30.0' fill='#a6accd' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='916.0' y='653.6'>L</text>
-<circle cx='299.1' cy='660.6' r='19.7' fill='#c3e88d' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='324.8' y='664.6'>S</text>
-<circle cx='563.0' cy='652.1' r='26.2' fill='#c3e88d' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='595.2' y='656.1'>M</text>
-<circle cx='880.0' cy='643.6' r='29.2' fill='#c3e88d' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='915.2' y='647.6'>L</text>
-<circle cx='299.1' cy='662.5' r='18.4' fill='#a6accd' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='323.5' y='666.5'>S</text>
-<circle cx='563.0' cy='655.5' r='26.1' fill='#a6accd' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='595.1' y='659.5'>M</text>
-<circle cx='880.0' cy='648.1' r='29.6' fill='#a6accd' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='915.6' y='652.1'>L</text>
-<circle cx='299.1' cy='655.9' r='17.9' fill='#c3e88d' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='323.0' y='659.9'>S</text>
-<circle cx='563.0' cy='636.9' r='26.3' fill='#c3e88d' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='595.3' y='640.9'>M</text>
-<circle cx='880.0' cy='616.9' r='29.2' fill='#c3e88d' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='915.2' y='620.9'>L</text>
-<circle cx='299.1' cy='661.8' r='18.0' fill='#4fd1c5' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='323.2' y='665.8'>S</text>
-<circle cx='563.0' cy='654.9' r='26.5' fill='#4fd1c5' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='595.5' y='658.9'>M</text>
-<circle cx='880.0' cy='646.2' r='29.3' fill='#4fd1c5' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='915.3' y='650.2'>L</text>
-<circle cx='299.1' cy='655.4' r='18.4' fill='#82aaff' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='323.6' y='659.4'>S</text>
-<circle cx='563.0' cy='628.2' r='26.5' fill='#82aaff' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='595.5' y='632.2'>M</text>
-<circle cx='880.0' cy='607.1' r='29.0' fill='#82aaff' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='915.0' y='611.1'>L</text>
-<circle cx='299.1' cy='534.1' r='18.4' fill='#ffd866' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='323.5' y='538.1'>S</text>
-<circle cx='563.0' cy='275.9' r='26.0' fill='#ffd866' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='595.0' y='279.9'>M</text>
-<circle cx='880.0' cy='90.0' r='29.2' fill='#ffd866' fill-opacity='.72' stroke='#e8eeff' stroke-width='1.5' />
-<text class='muted' x='915.2' y='94.0'>L</text>
-<circle cx='930' cy='110' r='7' fill='#4fd1c5' />
-<text class='text' x='945' y='114'>Gemma 4 E2B / SFP8</text>
-<circle cx='930' cy='136' r='7' fill='#a6accd' />
-<text class='text' x='945' y='140'>Gemma 4 E2B / Q4_0</text>
-<circle cx='930' cy='162' r='7' fill='#c3e88d' />
-<text class='text' x='945' y='166'>Gemma 4 E4B / SFP8</text>
-<circle cx='930' cy='188' r='7' fill='#a6accd' />
-<text class='text' x='945' y='192'>Gemma 4 E4B / Q4_0</text>
-<circle cx='930' cy='214' r='7' fill='#c3e88d' />
-<text class='text' x='945' y='218'>Gemma 4 26B A4B / SFP8</text>
-<circle cx='930' cy='240' r='7' fill='#4fd1c5' />
-<text class='text' x='945' y='244'>Gemma 4 26B A4B / Q4_0</text>
-<circle cx='930' cy='266' r='7' fill='#82aaff' />
-<text class='text' x='945' y='270'>Gemma 4 31B / Q4_0</text>
-<circle cx='930' cy='292' r='7' fill='#ffd866' />
-<text class='text' x='945' y='296'>Gemma 4 31B / SFP8</text>
+<polyline class='line' points='299.1,664.1 563.0,656.1 880.0,649.4' stroke='#c3e88d' />
+<circle cx='299.1' cy='664.1' r='5.5' fill='#c3e88d' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='656.1'>S</text>
+<circle cx='563.0' cy='656.1' r='5.5' fill='#c3e88d' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='648.1'>M</text>
+<circle cx='880.0' cy='649.4' r='5.5' fill='#c3e88d' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='641.4'>L</text>
+<polyline class='line' points='299.1,662.2 563.0,655.9 880.0,649.6' stroke='#4fd1c5' />
+<circle cx='299.1' cy='662.2' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='654.2'>S</text>
+<circle cx='563.0' cy='655.9' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='647.9'>M</text>
+<circle cx='880.0' cy='649.6' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='641.6'>L</text>
+<polyline class='line' points='299.1,660.6 563.0,652.1 880.0,643.6' stroke='#ffd866' />
+<circle cx='299.1' cy='660.6' r='5.5' fill='#ffd866' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='652.6'>S</text>
+<circle cx='563.0' cy='652.1' r='5.5' fill='#ffd866' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='644.1'>M</text>
+<circle cx='880.0' cy='643.6' r='5.5' fill='#ffd866' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='635.6'>L</text>
+<polyline class='line' points='299.1,662.5 563.0,655.5 880.0,648.1' stroke='#ffb86c' />
+<circle cx='299.1' cy='662.5' r='5.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='654.5'>S</text>
+<circle cx='563.0' cy='655.5' r='5.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='647.5'>M</text>
+<circle cx='880.0' cy='648.1' r='5.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='640.1'>L</text>
+<polyline class='line' points='299.1,655.9 563.0,636.9 880.0,616.9' stroke='#ffb86c' />
+<circle cx='299.1' cy='655.9' r='5.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='647.9'>S</text>
+<circle cx='563.0' cy='636.9' r='5.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='628.9'>M</text>
+<circle cx='880.0' cy='616.9' r='5.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='608.9'>L</text>
+<polyline class='line' points='299.1,661.8 563.0,654.9 880.0,646.2' stroke='#fab0ff' />
+<circle cx='299.1' cy='661.8' r='5.5' fill='#fab0ff' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='653.8'>S</text>
+<circle cx='563.0' cy='654.9' r='5.5' fill='#fab0ff' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='646.9'>M</text>
+<circle cx='880.0' cy='646.2' r='5.5' fill='#fab0ff' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='638.2'>L</text>
+<polyline class='line' points='299.1,655.4 563.0,628.2 880.0,607.1' stroke='#4fd1c5' />
+<circle cx='299.1' cy='655.4' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='647.4'>S</text>
+<circle cx='563.0' cy='628.2' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='620.2'>M</text>
+<circle cx='880.0' cy='607.1' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='599.1'>L</text>
+<polyline class='line' points='299.1,534.1 563.0,275.9 880.0,90.0' stroke='#4fd1c5' />
+<circle cx='299.1' cy='534.1' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='307.1' y='526.1'>S</text>
+<circle cx='563.0' cy='275.9' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='571.0' y='267.9'>M</text>
+<circle cx='880.0' cy='90.0' r='5.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.4' />
+<text class='muted' x='888.0' y='82.0'>L</text>
+<line x1='918' y1='110' x2='942' y2='110' stroke='#c3e88d' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='110' r='4.5' fill='#c3e88d' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='114'>Gemma 4 E2B / SFP8</text>
+<line x1='918' y1='136' x2='942' y2='136' stroke='#4fd1c5' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='136' r='4.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='140'>Gemma 4 E2B / Q4_0</text>
+<line x1='918' y1='162' x2='942' y2='162' stroke='#ffd866' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='162' r='4.5' fill='#ffd866' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='166'>Gemma 4 E4B / SFP8</text>
+<line x1='918' y1='188' x2='942' y2='188' stroke='#ffb86c' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='188' r='4.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='192'>Gemma 4 E4B / Q4_0</text>
+<line x1='918' y1='214' x2='942' y2='214' stroke='#ffb86c' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='214' r='4.5' fill='#ffb86c' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='218'>Gemma 4 26B A4B / SFP8</text>
+<line x1='918' y1='240' x2='942' y2='240' stroke='#fab0ff' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='240' r='4.5' fill='#fab0ff' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='244'>Gemma 4 26B A4B / Q4_0</text>
+<line x1='918' y1='266' x2='942' y2='266' stroke='#4fd1c5' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='266' r='4.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='270'>Gemma 4 31B / Q4_0</text>
+<line x1='918' y1='292' x2='942' y2='292' stroke='#4fd1c5' stroke-width='3' stroke-linecap='round' />
+<circle cx='930' cy='292' r='4.5' fill='#4fd1c5' stroke='#f6f8ff' stroke-width='1.1' />
+<text class='text' x='955' y='296'>Gemma 4 31B / SFP8</text>
 </svg>

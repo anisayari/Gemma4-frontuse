@@ -1,10 +1,10 @@
 # API Load Test
 
-Generated on 2026-04-05 15:44:09.
+Generated on 2026-04-05 16:09:07.
 
 ## Why audio is rejected on the current quantized runtime
 
-- Probe result on `e2b:sfp8`: HTTP `409` with `VRAM currently holds Gemma 4 26B A4B in SFP8. Click Load model to switch to Gemma 4 E2B / SFP8 before sending.`.
+- Probe result on `e2b:sfp8`: HTTP `400` with `Gemma 4 E2B in SFP8 does not support audio input in this runtime path.`.
 - In this app, the quantized `llama.cpp` path explicitly rejects audio input before inference. Image is wired through; audio is not on that runtime path.
 
 ## Load results
@@ -52,7 +52,7 @@ Generated on 2026-04-05 15:44:09.
 
 ## Latency graph
 
-![API latency bubble chart](gemma4-api-loadtest-latency-20260405-153459.svg)
+![API latency line chart](gemma4-api-loadtest-latency-20260405-153459.svg)
 
 ## Parallel request test
 
