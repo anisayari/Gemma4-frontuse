@@ -9,6 +9,11 @@ Local Gemma 4 workstation lab with:
 - experimental WSL `vLLM` bridge for `nvidia/Gemma-4-31B-IT-NVFP4`
 - benchmark scripts and benchmark reports
 
+Useful docs:
+
+- [API.md](./API.md)
+- [SETUP.md](./SETUP.md)
+
 ## Install and launch
 
 ### First-time full install
@@ -161,6 +166,29 @@ xychart-beta
     y-axis "tokens / second" 0 --> 300
     bar [243.41, 285.29, 154.83, 191.27, 166.75, 184.50, 66.12, 7.80]
 ```
+
+## API load test
+
+The API load test exercises the real local HTTP server rather than raw model runners. It measures:
+
+- model load time
+- streaming time to first token
+- total response latency
+- prompt length vs output length
+- effective parallelism under the current request queue
+
+Latest artifacts:
+
+- [API load test report](./benchmark/results/gemma4-api-loadtest-latest.md)
+- [API load test JSON](./benchmark/results/gemma4-api-loadtest-latest.json)
+
+### API latency graph
+
+![Gemma 4 API latency graph](benchmark/results/gemma4-api-loadtest-latency-latest.svg)
+
+### API parallel graph
+
+![Gemma 4 API parallel graph](benchmark/results/gemma4-api-loadtest-parallel-latest.svg)
 
 ## BF16 benchmark
 

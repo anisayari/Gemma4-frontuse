@@ -372,8 +372,16 @@ function formatElapsed(milliseconds) {
     : `${Math.round(milliseconds)} ms`
 }
 
+function formatPercent(value) {
+  return typeof value === 'number' ? `${value.toFixed(0)}%` : 'n/a'
+}
+
 function formatMemory(value) {
   return typeof value === 'number' ? `${value.toFixed(2)} GiB` : 'n/a'
+}
+
+function formatNumber(value, suffix = '') {
+  return typeof value === 'number' ? `${value}${suffix}` : 'n/a'
 }
 
 function getModelMemoryEstimate(model, quantizationKey) {
@@ -418,6 +426,38 @@ function formatMessageTime(value) {
     hour: '2-digit',
     minute: '2-digit',
   }).format(value)
+}
+
+function formatDateTime(value) {
+  if (!value) {
+    return 'n/a'
+  }
+
+  return new Intl.DateTimeFormat('fr-FR', {
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(value * 1000)
+}
+
+function getRequestStatusTone(status) {
+  switch (status) {
+    case 'running':
+      return 'is-active'
+    case 'completed':
+      return 'is-ready'
+    case 'failed':
+      return 'is-failed'
+    default:
+      return ''
+  }
+}
+
+function summarizeRouteLabel(route) {
+  if (!route) {
+    return 'Unknown route'
+  }
+
+  return route.replace('/api/v1/', '').replace('/api/', '')
 }
 
 function makeAttachmentSummary(imageFile, audioFile) {
@@ -876,6 +916,9 @@ function App() {
   const [isQuantizationMenuOpen, setIsQuantizationMenuOpen] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [viewMode, setViewMode] = useState('text')
+  const [monitoringSnapshot, setMonitoringSnapshot] = useState(null)
+  const [monitoringError, setMonitoringError] = useState('')
+  const [isRefreshingMonitoring, setIsRefreshingMonitoring] = useState(false)
   const [livePrompt, setLivePrompt] = useState(DEFAULT_LIVE_PROMPT)
   const [liveStatus, setLiveStatus] = useState('Live mode idle.')
   const [liveError, setLiveError] = useState('')
@@ -916,13 +959,9 @@ function App() {
   const supportsAudio = isLlamaCppRuntime || isWslVllmRuntime
     ? false
     : selectedModel?.supports_audio ?? true
-  const supportsImage = isLlamaCppRuntime
-    ? false
-    : selectedModel?.supports_image ?? true
+  const supportsImage = selectedModel?.supports_image ?? true
   const modalityBadges = selectedModel
-    ? isLlamaCppRuntime
-      ? ['text']
-      : isWslVllmRuntime
+    ? isWslVllmRuntime
         ? selectedModel.supported_modalities.filter((modality) => modality !== 'video')
         : selectedModel.supported_modalities
     : []
@@ -948,10 +987,26 @@ function App() {
     : 'No turns yet'
   const quantizationRuntimeSupported =
     selectedQuantization?.runtime_supported ?? false
+  const supportsLiveVision =
+    quantizationRuntimeSupported && supportsImage
   const supportsNativeLiveAudio =
     quantizationRuntimeSupported &&
     supportsAudio &&
     ['e2b', 'e4b'].includes(selectedModelKey)
+  const liveModeCapabilityLabel = !quantizationRuntimeSupported
+    ? 'Quantization not runnable here'
+    : supportsNativeLiveAudio
+      ? 'Vision + audio input'
+      : supportsLiveVision
+        ? 'Vision input only'
+        : 'Live input unavailable'
+  const liveModeCapabilityNote = !quantizationRuntimeSupported
+    ? 'Load a runnable quantization before starting live turns.'
+    : supportsNativeLiveAudio
+      ? `${selectedModel?.label || 'This model'} accepts camera frames and microphone turns in live mode.`
+      : supportsLiveVision
+        ? `${selectedModel?.label || 'This model'} accepts camera frames in live mode, but not audio input.`
+        : `${selectedModel?.label || 'This model'} is not configured for live multimodal input in this app build.`
   const audioAttachmentHint = !quantizationRuntimeSupported
     ? 'This quantization is planning only in the current backend'
     : supportsAudio
@@ -1041,6 +1096,20 @@ function App() {
     Boolean(selectedModelLoaded) &&
     !isModelLoading &&
     quantizationRuntimeSupported
+  const monitoringHealth = monitoringSnapshot?.health ?? health
+  const monitoringCurrentModel =
+    monitoringSnapshot?.current_model?.model ??
+    monitoringSnapshot?.health?.active_model ??
+    null
+  const monitoringGpu = monitoringSnapshot?.gpu ?? null
+  const monitoringMemory = monitoringSnapshot?.memory ?? null
+  const monitoringQueue = monitoringSnapshot?.queue ?? null
+  const monitoringRecentRequests = monitoringSnapshot?.recent_requests ?? []
+  const monitoringSystemRamUsed =
+    typeof monitoringMemory?.total_physical_gib === 'number' &&
+    typeof monitoringMemory?.available_physical_gib === 'number'
+      ? monitoringMemory.total_physical_gib - monitoringMemory.available_physical_gib
+      : null
 
   useEffect(() => {
     persistWorkspace({
@@ -1092,7 +1161,7 @@ function App() {
       setError(
         `${
           selectedModel?.label || 'This model'
-        } in ${selectedQuantization?.label || 'the selected quantization'} is currently wired for text chat only in this app build.`,
+        } does not accept image input in the official modality tables.`,
       )
     }
   }, [imageFile, selectedModel, selectedQuantization, supportsImage])
@@ -1337,6 +1406,34 @@ function App() {
     })
   }
 
+  async function refreshMonitoring({ silent = false } = {}) {
+    if (!silent) {
+      setIsRefreshingMonitoring(true)
+    }
+
+    try {
+      const response = await fetch('/api/v1/monitoring')
+      if (!response.ok) {
+        const data = await parseApiPayload(response)
+        throw new Error(data.detail || 'Unable to refresh monitoring.')
+      }
+
+      const data = await parseApiPayload(response)
+      startTransition(() => {
+        setMonitoringSnapshot(data)
+        setMonitoringError('')
+      })
+    } catch (refreshError) {
+      startTransition(() => {
+        setMonitoringError(refreshError.message)
+      })
+    } finally {
+      if (!silent) {
+        setIsRefreshingMonitoring(false)
+      }
+    }
+  }
+
   useEffect(() => {
     if (!isModelLoading) {
       return undefined
@@ -1398,6 +1495,48 @@ function App() {
       window.clearInterval(timer)
     }
   }, [isModelLoading])
+
+  useEffect(() => {
+    if (viewMode !== 'monitoring') {
+      return undefined
+    }
+
+    let isActive = true
+
+    async function pollMonitoring() {
+      try {
+        const response = await fetch('/api/v1/monitoring')
+        if (!response.ok) {
+          throw new Error('Unable to refresh monitoring.')
+        }
+        const data = await parseApiPayload(response)
+        if (!isActive) {
+          return
+        }
+        startTransition(() => {
+          setMonitoringSnapshot(data)
+          setMonitoringError('')
+        })
+      } catch (pollError) {
+        if (!isActive) {
+          return
+        }
+        startTransition(() => {
+          setMonitoringError(pollError.message)
+        })
+      }
+    }
+
+    void pollMonitoring()
+    const timer = window.setInterval(() => {
+      void pollMonitoring()
+    }, 2500)
+
+    return () => {
+      isActive = false
+      window.clearInterval(timer)
+    }
+  }, [viewMode])
 
   async function runTurn({
     promptText,
@@ -1539,6 +1678,24 @@ function App() {
       let finalPayload = null
 
       await readNdjsonStream(response, (event) => {
+        if (event.event === 'start') {
+          if (event.request_id) {
+            startTransition(() => {
+              setThreads((current) =>
+                updateMessageInThread(current, threadId, pendingAssistantId, (message) => ({
+                  ...message,
+                  meta: {
+                    ...(message.meta || {}),
+                    request_id: event.request_id,
+                    status_url: event.status_url,
+                  },
+                })),
+              )
+            })
+          }
+          return
+        }
+
         if (event.event === 'token') {
           streamedText += event.text || ''
           startTransition(() => {
@@ -1774,6 +1931,24 @@ function App() {
       }
 
       await readNdjsonStream(response, (event) => {
+        if (event.event === 'start') {
+          if (event.request_id) {
+            startTransition(() => {
+              setThreads((current) =>
+                updateMessageInThread(current, threadId, assistantMessageId, (message) => ({
+                  ...message,
+                  meta: {
+                    ...(message.meta || {}),
+                    request_id: event.request_id,
+                    status_url: event.status_url,
+                  },
+                })),
+              )
+            })
+          }
+          return
+        }
+
         if (event.event === 'token') {
           streamedText += event.text || ''
           startTransition(() => {
@@ -1981,7 +2156,9 @@ function App() {
       setLiveStatus(
         supportsNativeLiveAudio
           ? 'Camera and microphone are live.'
-          : 'Camera is live. Switch to E2B or E4B for microphone input.',
+          : supportsLiveVision
+            ? 'Camera is live. This model accepts vision turns only.'
+            : 'Camera preview is live. Load a model with vision support to send live turns.',
       )
       return true
     }
@@ -2009,7 +2186,9 @@ function App() {
       setLiveStatus(
         supportsNativeLiveAudio
           ? 'Camera and microphone are live.'
-          : 'Camera is live. Switch to E2B or E4B for microphone input.',
+          : supportsLiveVision
+            ? 'Camera is live. This model accepts vision turns only.'
+            : 'Camera preview is live. Load a model with vision support to send live turns.',
       )
       return true
     } catch (sessionError) {
@@ -2052,6 +2231,15 @@ function App() {
   }
 
   async function handleSendLiveFrame() {
+    setLiveError('')
+
+    if (!supportsLiveVision) {
+      setLiveError(
+        `${selectedModel?.label || 'This model'} does not accept live image turns in the current runtime.`,
+      )
+      return
+    }
+
     const ready = await startLiveSession()
     if (!ready) {
       return
@@ -2385,15 +2573,19 @@ function App() {
           <button
             className="utility-link"
             type="button"
+            onClick={() => setViewMode('monitoring')}
+          >
+            <span className="material-symbols-outlined">monitoring</span>
+            <span>Monitoring</span>
+          </button>
+
+          <button
+            className="utility-link"
+            type="button"
             onClick={() => setIsSettingsOpen(true)}
           >
             <span className="material-symbols-outlined">tune</span>
             <span>Settings</span>
-          </button>
-
-          <button className="utility-link" type="button">
-            <span className="material-symbols-outlined">history</span>
-            <span>Archive</span>
           </button>
 
           <div className="profile-card">
@@ -2457,6 +2649,17 @@ function App() {
               >
                 <span className="material-symbols-outlined">videocam</span>
                 <span>Video call</span>
+              </button>
+
+              <button
+                className={`mode-switch-button ${
+                  viewMode === 'monitoring' ? 'is-active' : ''
+                }`}
+                type="button"
+                onClick={() => setViewMode('monitoring')}
+              >
+                <span className="material-symbols-outlined">monitoring</span>
+                <span>Monitoring</span>
               </button>
             </div>
 
@@ -3042,6 +3245,223 @@ function App() {
           </form>
         </footer>
           </>
+        ) : viewMode === 'monitoring' ? (
+          <section
+            className={`monitoring-stage ${shouldShowLoadPanel ? 'has-load-progress' : ''}`}
+          >
+            <div className="monitoring-scroll">
+              <section className="editorial-hero monitoring-hero">
+                <div className="hero-copy">
+                  <p className="eyebrow">Operations</p>
+                  <h2>
+                    Local rig, <span className="gradient-text">in plain sight.</span>
+                  </h2>
+                  <p>
+                    Watch the loaded model, GPU pressure, RAM usage, queue depth,
+                    and recent inference requests from one place. Every inference
+                    call now gets a persistent request ID backed by SQLite.
+                  </p>
+                </div>
+
+                <div className="hero-panel">
+                  <div className="hero-panel-head">
+                    <div>
+                      <p className="section-label">Live status</p>
+                      <h3>{monitoringHealth?.loaded ? 'Model warm' : 'Waiting for load'}</h3>
+                    </div>
+
+                    <button
+                      className="ghost-action"
+                      type="button"
+                      onClick={() => void refreshMonitoring()}
+                      disabled={isRefreshingMonitoring}
+                    >
+                      <span className="material-symbols-outlined">sync</span>
+                      <span>{isRefreshingMonitoring ? 'Refreshing' : 'Refresh'}</span>
+                    </button>
+                  </div>
+
+                  <div className="hero-stat-grid">
+                    <div className="hero-stat">
+                      <span>Current model</span>
+                      <strong>{monitoringCurrentModel?.label || activeModel?.label || 'None loaded'}</strong>
+                    </div>
+                    <div className="hero-stat">
+                      <span>Runtime</span>
+                      <strong>{monitoringHealth?.runtime_family || 'idle'}</strong>
+                    </div>
+                    <div className="hero-stat">
+                      <span>Queue depth</span>
+                      <strong>{monitoringQueue?.queued_count ?? 0}</strong>
+                    </div>
+                    <div className="hero-stat">
+                      <span>SQLite</span>
+                      <strong>{monitoringSnapshot?.database?.path ? 'Tracking on' : 'Unavailable'}</strong>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="monitor-grid">
+                <article className="monitor-panel">
+                  <div className="monitor-panel-head">
+                    <div>
+                      <p className="section-label">Health checks</p>
+                      <h3>Machine state</h3>
+                    </div>
+                    <span className={`message-chip ${monitoringHealth?.loaded ? 'is-modality' : ''}`}>
+                      {monitoringHealth?.status || 'offline'}
+                    </span>
+                  </div>
+
+                  <div className="metric-grid">
+                    <div className="metric-card">
+                      <span>GPU load</span>
+                      <strong>{formatPercent(monitoringGpu?.utilization_gpu_percent)}</strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>GPU memory</span>
+                      <strong>
+                        {formatMemory(monitoringGpu?.memory_used_gib)} /{' '}
+                        {formatMemory(monitoringGpu?.memory_total_gib)}
+                      </strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>System RAM used</span>
+                      <strong>
+                        {formatMemory(monitoringSystemRamUsed)} /{' '}
+                        {formatMemory(monitoringMemory?.total_physical_gib)}
+                      </strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>Free commit</span>
+                      <strong>{formatMemory(monitoringMemory?.available_commit_gib)}</strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>GPU temp</span>
+                      <strong>{formatNumber(monitoringGpu?.temperature_c, ' C')}</strong>
+                    </div>
+                    <div className="metric-card">
+                      <span>GPU power</span>
+                      <strong>{formatNumber(monitoringGpu?.power_draw_watts, ' W')}</strong>
+                    </div>
+                  </div>
+
+                  {monitoringError ? (
+                    <p className="live-error">{monitoringError}</p>
+                  ) : null}
+                </article>
+
+                <article className="monitor-panel">
+                  <div className="monitor-panel-head">
+                    <div>
+                      <p className="section-label">Inference queue</p>
+                      <h3>Request pipeline</h3>
+                    </div>
+                    <span className="message-chip">
+                      {monitoringQueue?.active_request ? 'Active request' : 'Idle'}
+                    </span>
+                  </div>
+
+                  {monitoringQueue?.active_request ? (
+                    <div className="monitor-request-card">
+                      <div className="monitor-request-head">
+                        <strong>{monitoringQueue.active_request.request_id}</strong>
+                        <span className={`monitor-status-pill ${getRequestStatusTone(monitoringQueue.active_request.status)}`}>
+                          {monitoringQueue.active_request.status}
+                        </span>
+                      </div>
+                      <div className="monitor-request-meta">
+                        <span>{summarizeRouteLabel(monitoringQueue.active_request.route)}</span>
+                        <span>
+                          {monitoringQueue.active_request.model_key} /{' '}
+                          {monitoringQueue.active_request.quantization_key}
+                        </span>
+                        <span>{monitoringQueue.active_request.progress_message || 'Running'}</span>
+                      </div>
+                      {monitoringQueue.active_request.request_payload?.prompt_preview ? (
+                        <p className="muted-copy">
+                          {monitoringQueue.active_request.request_payload.prompt_preview}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="muted-copy">
+                      No active inference request right now.
+                    </p>
+                  )}
+
+                  {monitoringQueue?.queued_requests?.length ? (
+                    <div className="monitor-queue-list">
+                      {monitoringQueue.queued_requests.map((queuedRequest) => (
+                        <div key={queuedRequest.request_id} className="monitor-queue-item">
+                          <strong>{queuedRequest.request_id}</strong>
+                          <span>
+                            #{queuedRequest.queue_position || '?'} ·{' '}
+                            {queuedRequest.model_key || 'model'} /{' '}
+                            {queuedRequest.quantization_key || 'quant'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted-copy">The queue is empty.</p>
+                  )}
+                </article>
+              </section>
+
+              <section className="monitor-panel monitor-panel-wide">
+                <div className="monitor-panel-head">
+                  <div>
+                    <p className="section-label">Recent requests</p>
+                    <h3>Inference history</h3>
+                  </div>
+                  <span className="message-chip">
+                    {monitoringRecentRequests.length} tracked
+                  </span>
+                </div>
+
+                {monitoringRecentRequests.length > 0 ? (
+                  <div className="monitor-request-list">
+                    {monitoringRecentRequests.map((requestRow) => (
+                      <article key={requestRow.request_id} className="monitor-history-item">
+                        <div className="monitor-request-head">
+                          <strong>{requestRow.request_id}</strong>
+                          <span className={`monitor-status-pill ${getRequestStatusTone(requestRow.status)}`}>
+                            {requestRow.status}
+                          </span>
+                        </div>
+                        <div className="monitor-request-meta">
+                          <span>{summarizeRouteLabel(requestRow.route)}</span>
+                          <span>
+                            {requestRow.model_key || 'model'} /{' '}
+                            {requestRow.quantization_key || 'quant'}
+                          </span>
+                          <span>{formatElapsed(requestRow.elapsed_ms)}</span>
+                          <span>{formatDateTime(requestRow.created_at)}</span>
+                        </div>
+                        {requestRow.progress_message ? (
+                          <p className="muted-copy">{requestRow.progress_message}</p>
+                        ) : null}
+                        {requestRow.response_preview ? (
+                          <p className="monitor-response-preview">
+                            {requestRow.response_preview}
+                          </p>
+                        ) : null}
+                        {requestRow.error_text ? (
+                          <p className="live-error">{requestRow.error_text}</p>
+                        ) : null}
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="muted-copy">
+                    No inference request has been stored in SQLite yet.
+                  </p>
+                )}
+              </section>
+            </div>
+          </section>
         ) : (
           <section
             className={`live-stage ${shouldShowLoadPanel ? 'has-load-progress' : ''}`}
@@ -3066,8 +3486,9 @@ function App() {
                     <p className="eyebrow">Live vision call</p>
                     <h2>Camera, microphone, and Gemma on one stage.</h2>
                     <p>
-                      Start a local live session, speak into the microphone, and
-                      send the current camera frame with every turn.
+                      Start a local live session, preview the camera feed, and
+                      send the current frame or a microphone turn when the loaded
+                      model supports it.
                     </p>
                     <div className="live-overlay-actions">
                       <button
@@ -3102,6 +3523,10 @@ function App() {
                     </span>
                   </div>
                   <div className="live-pill">
+                    <span className="material-symbols-outlined">image</span>
+                    <span>{supportsLiveVision ? 'Vision enabled' : 'Vision disabled'}</span>
+                  </div>
+                  <div className="live-pill">
                     <span className="material-symbols-outlined">graphic_eq</span>
                     <span>{supportsNativeLiveAudio ? 'Voice in enabled' : 'Voice in disabled'}</span>
                   </div>
@@ -3128,11 +3553,7 @@ function App() {
 
                 <div className="live-chip-row">
                   <span className="message-chip">
-                    {quantizationRuntimeSupported
-                      ? supportsNativeLiveAudio
-                        ? 'Audio input to Gemma'
-                        : 'Vision only on this model'
-                      : 'Quantization not runnable here'}
+                    {liveModeCapabilityLabel}
                   </span>
                   <span className="message-chip">
                     {autoSpeak ? 'Local TTS on' : 'Local TTS off'}
@@ -3210,7 +3631,7 @@ function App() {
                       isLiveSubmitting ||
                       isModelLoading ||
                       !selectedModelLoaded ||
-                      !quantizationRuntimeSupported
+                      !supportsLiveVision
                     }
                   >
                     <span className="material-symbols-outlined">photo_camera</span>
@@ -3241,10 +3662,9 @@ function App() {
 
                 <div className="live-note-stack">
                   <p className="hero-note">
-                    Gemma 4 E2B and E4B accept audio input. The response voice is
-                    now generated server-side with Piper and played back as a local
-                    WAV clip because the current Gemma checkpoints still return
-                    text, not native audio.
+                    {liveModeCapabilityNote} Spoken replies still come from the
+                    local Piper backend, because the current Gemma checkpoints
+                    return text, not native audio.
                   </p>
                   {liveError ? <p className="live-error">{liveError}</p> : null}
                 </div>

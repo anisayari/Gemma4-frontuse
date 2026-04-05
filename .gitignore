@@ -9,6 +9,9 @@ tts/voices/
 backend/__pycache__/
 benchmark/__pycache__/
 logs/
+data/*.sqlite3
+data/*.sqlite3-shm
+data/*.sqlite3-wal
 tools/
 uvicorn-*.log
 *.pyc

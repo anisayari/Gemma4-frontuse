@@ -1,0 +1,1478 @@
+{
+  "generated_at": "2026-04-05T15:44:09.541777",
+  "base_url": "http://127.0.0.1:8000",
+  "results": [
+    {
+      "label": "Gemma 4 E2B / SFP8",
+      "model_key": "e2b",
+      "quantization_key": "sfp8",
+      "model_id": "e2b:sfp8",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 E2B is already loaded in SFP8.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 E2B is already loaded in SFP8.",
+          "error": null,
+          "target_model_key": "e2b",
+          "target_model": {
+            "key": "e2b",
+            "label": "Gemma 4 E2B",
+            "hf_model_id": "google/gemma-4-E2B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "2.3B effective / 5.1B with embeddings",
+            "active_parameter_summary": "2.3B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 9.6,
+              "sfp8": 4.6,
+              "q4_0": 3.2
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E2B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E2B-it-GGUF"
+            },
+            "doc_summary": "Small edge model with native audio support."
+          },
+          "target_quantization_key": "sfp8",
+          "target_quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "started_at": 1775394328.3651345,
+          "finished_at": 1775396099.8605845,
+          "updated_at": 1775396099.8605928
+        },
+        "load_seconds": 0.029,
+        "current_model": {
+          "model_key": "e2b",
+          "quantization_key": "sfp8",
+          "model": {
+            "key": "e2b",
+            "label": "Gemma 4 E2B",
+            "hf_model_id": "google/gemma-4-E2B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "2.3B effective / 5.1B with embeddings",
+            "active_parameter_summary": "2.3B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 9.6,
+              "sfp8": 4.6,
+              "q4_0": 3.2
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E2B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E2B-it-GGUF"
+            },
+            "doc_summary": "Small edge model with native audio support."
+          },
+          "quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775394339.7932327
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "6b053dfe1289452f96f2239ca6be30a8",
+          "ttft_seconds": 0.102,
+          "total_seconds": 0.352,
+          "output_chars": 206,
+          "output_preview": "Ce serveur est utile pour effectuer des évaluations de performance en temps réel du modèle Gemma. Il permet de mesurer la vitesse d'inférence et l'efficacité du",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "813671a2c91949debd79e82fab67cf24",
+          "ttft_seconds": 0.118,
+          "total_seconds": 0.824,
+          "output_chars": 566,
+          "output_preview": "Voici six points concis expliquant l'utilité de cette configuration pour le prototypage de produits d'IA locaux :  *   **Déploiement Local Complet :** Permet de",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "09fbc13b693e40b0a3c9b8be11873d4e",
+          "ttft_seconds": 0.144,
+          "total_seconds": 1.223,
+          "output_chars": 762,
+          "output_preview": "Voici 12 points en français décrivant comment une telle API locale peut aider les développeurs à tester des idées de produits, des flux multimodaux, des files d",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 E2B / Q4_0",
+      "model_key": "e2b",
+      "quantization_key": "q4_0",
+      "model_id": "e2b:q4_0",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 E2B is ready in Q4_0.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 E2B is ready in Q4_0.",
+          "error": null,
+          "target_model_key": "e2b",
+          "target_model": {
+            "key": "e2b",
+            "label": "Gemma 4 E2B",
+            "hf_model_id": "google/gemma-4-E2B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "2.3B effective / 5.1B with embeddings",
+            "active_parameter_summary": "2.3B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 9.6,
+              "sfp8": 4.6,
+              "q4_0": 3.2
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E2B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E2B-it-GGUF"
+            },
+            "doc_summary": "Small edge model with native audio support."
+          },
+          "target_quantization_key": "q4_0",
+          "target_quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "started_at": 1775396102.2889206,
+          "finished_at": 1775396131.0739174,
+          "updated_at": 1775396131.0739255
+        },
+        "load_seconds": 29.088,
+        "current_model": {
+          "model_key": "e2b",
+          "quantization_key": "q4_0",
+          "model": {
+            "key": "e2b",
+            "label": "Gemma 4 E2B",
+            "hf_model_id": "google/gemma-4-E2B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "2.3B effective / 5.1B with embeddings",
+            "active_parameter_summary": "2.3B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 9.6,
+              "sfp8": 4.6,
+              "q4_0": 3.2
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E2B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E2B-it-GGUF"
+            },
+            "doc_summary": "Small edge model with native audio support."
+          },
+          "quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775396131.0739403
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "7d6f345017d145de9dcec77f152c695f",
+          "ttft_seconds": 0.255,
+          "total_seconds": 0.461,
+          "output_chars": 182,
+          "output_preview": "This server is useful for running inference tasks for the Gemma model with high-performance acceleration. It allows for rapid evaluation of the model's performa",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "5a6528144b654928abde55b8e568d9cf",
+          "ttft_seconds": 0.139,
+          "total_seconds": 0.839,
+          "output_chars": 527,
+          "output_preview": "Voici six points concis expliquant l'utilité de cette configuration pour le prototypage de produits d'IA locaux :  *   **Déploiement Local Complet:** Permet de ",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "340a377239ec47acad0368e74aa40013",
+          "ttft_seconds": 0.113,
+          "total_seconds": 1.21,
+          "output_chars": 822,
+          "output_preview": "Here are 12 points in French detailing how such a local API setup aids in pre-deployment testing:  1. **Validation de l'API (API Validation):** Permet de tester",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 E4B / SFP8",
+      "model_key": "e4b",
+      "quantization_key": "sfp8",
+      "model_id": "e4b:sfp8",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 E4B is ready in SFP8.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 E4B is ready in SFP8.",
+          "error": null,
+          "target_model_key": "e4b",
+          "target_model": {
+            "key": "e4b",
+            "label": "Gemma 4 E4B",
+            "hf_model_id": "google/gemma-4-E4B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "4.5B effective / 8B with embeddings",
+            "active_parameter_summary": "4.5B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 15.0,
+              "sfp8": 7.5,
+              "q4_0": 5.0
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E4B-it-GGUF"
+            },
+            "doc_summary": "Best balanced small model with native audio support."
+          },
+          "target_quantization_key": "sfp8",
+          "target_quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "started_at": 1775396133.8894901,
+          "finished_at": 1775396165.026441,
+          "updated_at": 1775396165.0264502
+        },
+        "load_seconds": 32.194,
+        "current_model": {
+          "model_key": "e4b",
+          "quantization_key": "sfp8",
+          "model": {
+            "key": "e4b",
+            "label": "Gemma 4 E4B",
+            "hf_model_id": "google/gemma-4-E4B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "4.5B effective / 8B with embeddings",
+            "active_parameter_summary": "4.5B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 15.0,
+              "sfp8": 7.5,
+              "q4_0": 5.0
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E4B-it-GGUF"
+            },
+            "doc_summary": "Best balanced small model with native audio support."
+          },
+          "quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775396165.0264604
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "c6ff7d7060464d60b0c880b8a6b5bc1f",
+          "ttft_seconds": 0.16,
+          "total_seconds": 0.556,
+          "output_chars": 232,
+          "output_preview": "Ce serveur est optimisé pour l'inférence locale de modèles de langage Gemma sur une seule carte RTX 5090. Il permet donc des tests de performance et des applica",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "44376ee5105b493eb12b0c01811205b0",
+          "ttft_seconds": 0.124,
+          "total_seconds": 1.063,
+          "output_chars": 562,
+          "output_preview": "Voici 6 points concis décrivant l'utilité de cette configuration pour le prototypage de produits IA locaux :  *   **Déploiement Local Complet :** L'exécution lo",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "2bfe448f1e7e4df9ae171548388e0b7c",
+          "ttft_seconds": 0.122,
+          "total_seconds": 1.569,
+          "output_chars": 765,
+          "output_preview": "Voici 12 points concis et informatifs en français décrivant comment une telle API locale peut aider les développeurs :  1. **Validation Précoce de Concepts :** ",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 E4B / Q4_0",
+      "model_key": "e4b",
+      "quantization_key": "q4_0",
+      "model_id": "e4b:q4_0",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 E4B is ready in Q4_0.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 E4B is ready in Q4_0.",
+          "error": null,
+          "target_model_key": "e4b",
+          "target_model": {
+            "key": "e4b",
+            "label": "Gemma 4 E4B",
+            "hf_model_id": "google/gemma-4-E4B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "4.5B effective / 8B with embeddings",
+            "active_parameter_summary": "4.5B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 15.0,
+              "sfp8": 7.5,
+              "q4_0": 5.0
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E4B-it-GGUF"
+            },
+            "doc_summary": "Best balanced small model with native audio support."
+          },
+          "target_quantization_key": "q4_0",
+          "target_quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "started_at": 1775396169.247094,
+          "finished_at": 1775396199.3250368,
+          "updated_at": 1775396199.325045
+        },
+        "load_seconds": 31.03,
+        "current_model": {
+          "model_key": "e4b",
+          "quantization_key": "q4_0",
+          "model": {
+            "key": "e4b",
+            "label": "Gemma 4 E4B",
+            "hf_model_id": "google/gemma-4-E4B-it",
+            "architecture": "Dense",
+            "tier": "Edge",
+            "context_length": "128K",
+            "parameter_summary": "4.5B effective / 8B with embeddings",
+            "active_parameter_summary": "4.5B effective",
+            "supported_modalities": [
+              "text",
+              "image",
+              "audio"
+            ],
+            "supports_audio": true,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 15.0,
+              "sfp8": 7.5,
+              "q4_0": 5.0
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-E4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-E4B-it-GGUF"
+            },
+            "doc_summary": "Best balanced small model with native audio support."
+          },
+          "quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775396199.3250546
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "c64b31c213484e7282fe669c03f8f725",
+          "ttft_seconds": 0.188,
+          "total_seconds": 0.446,
+          "output_chars": 182,
+          "output_preview": "Ce serveur est optimisé pour l'inférence locale de modèles de langage Gemma. Il permet d'exécuter des tâches NLP gourmandes en ressources sur une seule carte gr",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "be898913451048f48e3e739157a551c5",
+          "ttft_seconds": 0.116,
+          "total_seconds": 0.862,
+          "output_chars": 555,
+          "output_preview": "Voici 6 points concis décrivant l'utilité de cette configuration pour le prototypage de produits IA locaux :  * **Déploiement Local Complet (FastAPI/React):** P",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "8da4bfdecf0648cd836aab9ca74895e0",
+          "ttft_seconds": 0.143,
+          "total_seconds": 1.297,
+          "output_chars": 792,
+          "output_preview": "Voici 12 points concis en français décrivant comment une telle API locale peut aider les développeurs :  1. **Prototypage Rapide (MVP):** Permet de valider l'ar",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 26B A4B / SFP8",
+      "model_key": "26b-a4b",
+      "quantization_key": "sfp8",
+      "model_id": "26b-a4b:sfp8",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 26B A4B is ready in SFP8.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 26B A4B is ready in SFP8.",
+          "error": null,
+          "target_model_key": "26b-a4b",
+          "target_model": {
+            "key": "26b-a4b",
+            "label": "Gemma 4 26B A4B",
+            "hf_model_id": "google/gemma-4-26B-A4B-it",
+            "architecture": "MoE",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "25.2B total / 3.8B active",
+            "active_parameter_summary": "3.8B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 48.0,
+              "sfp8": 25.0,
+              "q4_0": 15.6
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-26B-A4B-it-GGUF"
+            },
+            "doc_summary": "Mixture-of-Experts variant tuned for faster workstation inference."
+          },
+          "target_quantization_key": "sfp8",
+          "target_quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "started_at": 1775396202.8831372,
+          "finished_at": 1775396236.96361,
+          "updated_at": 1775396236.963618
+        },
+        "load_seconds": 35.293,
+        "current_model": {
+          "model_key": "26b-a4b",
+          "quantization_key": "sfp8",
+          "model": {
+            "key": "26b-a4b",
+            "label": "Gemma 4 26B A4B",
+            "hf_model_id": "google/gemma-4-26B-A4B-it",
+            "architecture": "MoE",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "25.2B total / 3.8B active",
+            "active_parameter_summary": "3.8B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 48.0,
+              "sfp8": 25.0,
+              "q4_0": 15.6
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-26B-A4B-it-GGUF"
+            },
+            "doc_summary": "Mixture-of-Experts variant tuned for faster workstation inference."
+          },
+          "quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775396236.9636323
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "df93168445604ec7abe3a75ab2541270",
+          "ttft_seconds": 0.256,
+          "total_seconds": 0.834,
+          "output_chars": 167,
+          "output_preview": "Ce serveur permet de tester les performances de l'inférence locale avec un modèle Gemma 4. Il sert à évaluer la latence et le débit sur une architecture GPU de ",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "27fde00b840f4ae18df18a709f9708ea",
+          "ttft_seconds": 0.181,
+          "total_seconds": 1.964,
+          "output_chars": 571,
+          "output_preview": "Voici pourquoi cette configuration est idéale pour le prototypage de produits IA locaux :  * **Boucle de rétroaction rapide** : L'intégration FastAPI/React perm",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "b2b32ca01778456d8292006ec82dba74",
+          "ttft_seconds": 0.222,
+          "total_seconds": 3.153,
+          "output_chars": 760,
+          "output_preview": "Voici 12 points techniques sur l'utilité de cette architecture locale pour la phase de prototypage :  1. **Validation rapide de concept (PoC) :** Testez la viab",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 26B A4B / Q4_0",
+      "model_key": "26b-a4b",
+      "quantization_key": "q4_0",
+      "model_id": "26b-a4b:q4_0",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 26B A4B is ready in Q4_0.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 26B A4B is ready in Q4_0.",
+          "error": null,
+          "target_model_key": "26b-a4b",
+          "target_model": {
+            "key": "26b-a4b",
+            "label": "Gemma 4 26B A4B",
+            "hf_model_id": "google/gemma-4-26B-A4B-it",
+            "architecture": "MoE",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "25.2B total / 3.8B active",
+            "active_parameter_summary": "3.8B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 48.0,
+              "sfp8": 25.0,
+              "q4_0": 15.6
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-26B-A4B-it-GGUF"
+            },
+            "doc_summary": "Mixture-of-Experts variant tuned for faster workstation inference."
+          },
+          "target_quantization_key": "q4_0",
+          "target_quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "started_at": 1775396244.1383462,
+          "finished_at": 1775396314.7116718,
+          "updated_at": 1775396314.7116792
+        },
+        "load_seconds": 71.696,
+        "current_model": {
+          "model_key": "26b-a4b",
+          "quantization_key": "q4_0",
+          "model": {
+            "key": "26b-a4b",
+            "label": "Gemma 4 26B A4B",
+            "hf_model_id": "google/gemma-4-26B-A4B-it",
+            "architecture": "MoE",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "25.2B total / 3.8B active",
+            "active_parameter_summary": "3.8B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 48.0,
+              "sfp8": 25.0,
+              "q4_0": 15.6
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-26B-A4B-it-GGUF"
+            },
+            "doc_summary": "Mixture-of-Experts variant tuned for faster workstation inference."
+          },
+          "quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775396314.7116888
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "d9978f01ebd5472e97dac2081f9a1baa",
+          "ttft_seconds": 0.245,
+          "total_seconds": 0.487,
+          "output_chars": 171,
+          "output_preview": "Ce serveur permet d'exécuter des modèles de langage de pointe avec une latence minimale. Il est idéal pour le développement local et le prototypage rapide d'IA ",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "5a03f8422a474bf79a03f415e6ac78c8",
+          "ttft_seconds": 0.162,
+          "total_seconds": 0.895,
+          "output_chars": 581,
+          "output_preview": "Voici pourquoi cette configuration est idéale pour le prototypage de produits IA locaux :  * **Contrôle total de la confidentialité :** L'exécution locale garan",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "94affb9cbcf344d0871fde04ffaadbe9",
+          "ttft_seconds": 0.164,
+          "total_seconds": 1.41,
+          "output_chars": 767,
+          "output_preview": "Voici 12 points techniques sur l'utilité de cette architecture locale pour le développement :  1. **Validation rapide de concept (PoC) :** Testez des idées de p",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 31B / Q4_0",
+      "model_key": "31b",
+      "quantization_key": "q4_0",
+      "model_id": "31b:q4_0",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 31B is ready in Q4_0.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 31B is ready in Q4_0.",
+          "error": null,
+          "target_model_key": "31b",
+          "target_model": {
+            "key": "31b",
+            "label": "Gemma 4 31B",
+            "hf_model_id": "google/gemma-4-31B-it",
+            "architecture": "Dense",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "30.7B dense",
+            "active_parameter_summary": "30.7B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 58.3,
+              "sfp8": 30.4,
+              "q4_0": 17.4
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-31B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-31B-it-GGUF"
+            },
+            "doc_summary": "Largest dense Gemma 4 variant for local workstation use."
+          },
+          "target_quantization_key": "q4_0",
+          "target_quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "started_at": 1775396318.6150842,
+          "finished_at": 1775396372.6917896,
+          "updated_at": 1775396372.6917984
+        },
+        "load_seconds": 54.688,
+        "current_model": {
+          "model_key": "31b",
+          "quantization_key": "q4_0",
+          "model": {
+            "key": "31b",
+            "label": "Gemma 4 31B",
+            "hf_model_id": "google/gemma-4-31B-it",
+            "architecture": "Dense",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "30.7B dense",
+            "active_parameter_summary": "30.7B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 58.3,
+              "sfp8": 30.4,
+              "q4_0": 17.4
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-31B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-31B-it-GGUF"
+            },
+            "doc_summary": "Largest dense Gemma 4 variant for local workstation use."
+          },
+          "quantization": {
+            "key": "q4_0",
+            "label": "Q4_0",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "Quantized local runtime served through llama.cpp. In this app build, Q4_0 is enabled for fast text chat."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775396372.691812
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "02fbef9750fa41709b246e890c528acc",
+          "ttft_seconds": 0.159,
+          "total_seconds": 0.864,
+          "output_chars": 185,
+          "output_preview": "Ce serveur permet d'exécuter des modèles LLM performants en local avec une faible latence. Il est idéal pour le traitement confidentiel de données et le dévelop",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "2bdc935b74e84207b1139f7c22504d42",
+          "ttft_seconds": 0.21,
+          "total_seconds": 2.48,
+          "output_chars": 581,
+          "output_preview": "Voici pourquoi cette configuration est utile pour le prototypage de produits IA locaux :  *   **Confidentialité totale :** Traitement des données en local, élim",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "95a672899d97430781c32347a4d929e6",
+          "ttft_seconds": 0.264,
+          "total_seconds": 3.733,
+          "output_chars": 746,
+          "output_preview": "Voici 12 points techniques sur l'utilité de cette API locale pour le développement :  1. **Prototypage rapide** : Validation immédiate d'idées de produits sans ",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 31B / SFP8",
+      "model_key": "31b",
+      "quantization_key": "sfp8",
+      "model_id": "31b:sfp8",
+      "load": {
+        "ok": true,
+        "status_code": 200,
+        "error": null,
+        "message": "Gemma 4 31B is ready in SFP8.",
+        "load_state": {
+          "status": "loaded",
+          "is_loading": false,
+          "progress": 100,
+          "message": "Gemma 4 31B is ready in SFP8.",
+          "error": null,
+          "target_model_key": "31b",
+          "target_model": {
+            "key": "31b",
+            "label": "Gemma 4 31B",
+            "hf_model_id": "google/gemma-4-31B-it",
+            "architecture": "Dense",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "30.7B dense",
+            "active_parameter_summary": "30.7B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 58.3,
+              "sfp8": 30.4,
+              "q4_0": 17.4
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-31B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-31B-it-GGUF"
+            },
+            "doc_summary": "Largest dense Gemma 4 variant for local workstation use."
+          },
+          "target_quantization_key": "sfp8",
+          "target_quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "started_at": 1775396380.4018903,
+          "finished_at": 1775396425.5009665,
+          "updated_at": 1775396425.5009758
+        },
+        "load_seconds": 45.912,
+        "current_model": {
+          "model_key": "31b",
+          "quantization_key": "sfp8",
+          "model": {
+            "key": "31b",
+            "label": "Gemma 4 31B",
+            "hf_model_id": "google/gemma-4-31B-it",
+            "architecture": "Dense",
+            "tier": "Workstation",
+            "context_length": "256K",
+            "parameter_summary": "30.7B dense",
+            "active_parameter_summary": "30.7B active",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "bf16": 58.3,
+              "sfp8": 30.4,
+              "q4_0": 17.4
+            },
+            "llama_cpp_hf_repo_ids": {
+              "q4_0": "bartowski/google_gemma-4-31B-it-GGUF",
+              "sfp8": "ggml-org/gemma-4-31B-it-GGUF"
+            },
+            "doc_summary": "Largest dense Gemma 4 variant for local workstation use."
+          },
+          "quantization": {
+            "key": "sfp8",
+            "label": "SFP8",
+            "precision_bits": 8,
+            "runtime_supported": true,
+            "status": "llama.cpp",
+            "runtime_family": "llama.cpp",
+            "doc_summary": "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF runtime through llama.cpp."
+          },
+          "runtime_capabilities": {
+            "runtime_family": "llama.cpp",
+            "supported_modalities": [
+              "text",
+              "image"
+            ],
+            "supports_text": true,
+            "supports_image": true,
+            "supports_audio": false
+          },
+          "runtime_family": "llama.cpp",
+          "loaded_at": 1775396425.500988
+        },
+        "runtime_family": "llama.cpp",
+        "runtime_capabilities": {
+          "runtime_family": "llama.cpp",
+          "supported_modalities": [
+            "text",
+            "image"
+          ],
+          "supports_text": true,
+          "supports_image": true,
+          "supports_audio": false
+        }
+      },
+      "workloads": [
+        {
+          "name": "short",
+          "input_chars": 126,
+          "max_tokens": 64,
+          "ok": true,
+          "request_id": "0bfe0b8fe812484da20709cb2bf1d7e2",
+          "ttft_seconds": 1.948,
+          "total_seconds": 8.063,
+          "output_chars": 184,
+          "output_preview": "Ce serveur permet d'exécuter des modèles de langage localement avec une latence minimale. Il est idéal pour le traitement confidentiel de données et le développ",
+          "finish_reason": "stop",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "medium",
+          "input_chars": 285,
+          "max_tokens": 128,
+          "ok": true,
+          "request_id": "e4b31cc4548d4fa6b2a0a335a8ebbb07",
+          "ttft_seconds": 2.64,
+          "total_seconds": 23.387,
+          "output_chars": 552,
+          "output_preview": "Voici pourquoi cette configuration est utile pour le prototypage de produits IA locaux :  *   **Contrôle total des données :** Confidentialité absolue et confor",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        },
+        {
+          "name": "long",
+          "input_chars": 476,
+          "max_tokens": 192,
+          "ok": true,
+          "request_id": "08c5b0f19f6c4d7da175aa32e3456a57",
+          "ttft_seconds": 3.296,
+          "total_seconds": 34.419,
+          "output_chars": 760,
+          "output_preview": "Voici 12 points techniques sur l'utilité de cette API locale pour le prototypage :  1. **Itération rapide** : Test immédiat des prompts sans coûts d'API cloud n",
+          "finish_reason": "length",
+          "prompt_tokens": null,
+          "completion_tokens": null
+        }
+      ]
+    },
+    {
+      "label": "Gemma 4 31B IT NVFP4 / NVFP4",
+      "model_key": "31b-nvfp4",
+      "quantization_key": "nvfp4",
+      "model_id": "31b-nvfp4:nvfp4",
+      "load": {
+        "ok": false,
+        "status_code": 200,
+        "error": "Gemma 4 31B IT NVFP4 could not be loaded because the machine ran out of memory. Free RAM or VRAM, or switch to a smaller Gemma 4 variant.",
+        "message": "Model load failed.",
+        "load_state": {
+          "status": "failed",
+          "is_loading": false,
+          "progress": 72,
+          "message": "Model load failed.",
+          "error": "Gemma 4 31B IT NVFP4 could not be loaded because the machine ran out of memory. Free RAM or VRAM, or switch to a smaller Gemma 4 variant.",
+          "target_model_key": "31b-nvfp4",
+          "target_model": {
+            "key": "31b-nvfp4",
+            "label": "Gemma 4 31B IT NVFP4",
+            "hf_model_id": "nvidia/Gemma-4-31B-IT-NVFP4",
+            "architecture": "Dense",
+            "tier": "Blackwell",
+            "context_length": "256K",
+            "parameter_summary": "30.7B dense / NVIDIA ModelOpt NVFP4",
+            "active_parameter_summary": "30.7B active",
+            "supported_modalities": [
+              "text",
+              "image",
+              "video"
+            ],
+            "supports_audio": false,
+            "supports_image": true,
+            "supports_text": true,
+            "memory_requirements_gib": {
+              "nvfp4": null
+            },
+            "llama_cpp_hf_repo_ids": {},
+            "doc_summary": "NVIDIA-optimized NVFP4 checkpoint. Inputs are text, image, and video; output is text. This local lab can route it through an experimental WSL vLLM path on NVIDIA Blackwell."
+          },
+          "target_quantization_key": "nvfp4",
+          "target_quantization": {
+            "key": "nvfp4",
+            "label": "NVFP4",
+            "precision_bits": 4,
+            "runtime_supported": true,
+            "status": "wsl-vllm",
+            "runtime_family": "vllm-wsl",
+            "doc_summary": "NVIDIA ModelOpt NVFP4 checkpoint format. The official model card targets vLLM on NVIDIA Blackwell under Linux. This lab bridges it through a local WSL vLLM runtime with tuned memory settings."
+          },
+          "started_at": 1775396492.17813,
+          "finished_at": 1775396588.0620239,
+          "updated_at": 1775396588.0620337
+        },
+        "load_seconds": 96.055,
+        "current_model": null,
+        "runtime_family": null,
+        "runtime_capabilities": null
+      },
+      "workloads": []
+    }
+  ],
+  "parallel_results": [
+    {
+      "label": "Gemma 4 E2B / SFP8",
+      "concurrent_requests": 1,
+      "makespan_seconds": 0.69,
+      "avg_latency_seconds": 0.688,
+      "max_latency_seconds": 0.688,
+      "effective_parallelism": 1.0
+    },
+    {
+      "label": "Gemma 4 E2B / SFP8",
+      "concurrent_requests": 2,
+      "makespan_seconds": 1.117,
+      "avg_latency_seconds": 0.85,
+      "max_latency_seconds": 1.117,
+      "effective_parallelism": 1.24
+    },
+    {
+      "label": "Gemma 4 E2B / SFP8",
+      "concurrent_requests": 4,
+      "makespan_seconds": 2.229,
+      "avg_latency_seconds": 1.41,
+      "max_latency_seconds": 2.227,
+      "effective_parallelism": 1.24
+    },
+    {
+      "label": "Gemma 4 26B A4B / SFP8",
+      "concurrent_requests": 1,
+      "makespan_seconds": 0.912,
+      "avg_latency_seconds": 0.912,
+      "max_latency_seconds": 0.912,
+      "effective_parallelism": 1.0
+    },
+    {
+      "label": "Gemma 4 26B A4B / SFP8",
+      "concurrent_requests": 2,
+      "makespan_seconds": 1.545,
+      "avg_latency_seconds": 1.166,
+      "max_latency_seconds": 1.544,
+      "effective_parallelism": 1.18
+    },
+    {
+      "label": "Gemma 4 26B A4B / SFP8",
+      "concurrent_requests": 4,
+      "makespan_seconds": 3.055,
+      "avg_latency_seconds": 1.94,
+      "max_latency_seconds": 3.055,
+      "effective_parallelism": 1.19
+    }
+  ],
+  "audio_probe": {
+    "status_code": 400,
+    "detail": "Gemma 4 E2B in SFP8 does not support audio input in this runtime path."
+  },
+  "artifacts": {
+    "markdown": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-20260405-153459.md",
+    "bubble_svg": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-latency-20260405-153459.svg",
+    "parallel_svg": "C:\\Users\\Anis AYARI\\Desktop\\projects\\gemma4-test\\benchmark\\results\\gemma4-api-loadtest-parallel-20260405-153459.svg"
+  }
+}

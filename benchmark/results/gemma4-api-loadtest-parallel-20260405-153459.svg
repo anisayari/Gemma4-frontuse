@@ -1,0 +1,42 @@
+<svg viewBox='0 0 1200 620' width='1200' height='620' xmlns='http://www.w3.org/2000/svg'>
+<style>.bg{fill:#08101f}.panel{fill:#0f1930}.grid{stroke:#2b3550;stroke-width:1;opacity:.7}.axis{stroke:#8aa5d6;stroke-width:2}.title{fill:#dee5ff;font:800 28px Manrope,Inter,Arial,sans-serif}.text{fill:#dee5ff;font:14px Inter,Arial,sans-serif}.muted{fill:#a3aac4;font:12px Inter,Arial,sans-serif}</style>
+<rect class='bg' x='0' y='0' width='1200' height='620' rx='24' />
+<rect class='panel' x='30' y='30' width='1140' height='560' rx='24' />
+<text class='title' x='60' y='78'>Concurrent request makespan</text>
+<text class='muted' x='60' y='104'>The current backend serializes inference through one queue, so values close to linear imply effective parallelism near 1.</text>
+<line class='grid' x1='90' y1='90.0' x2='1080' y2='90.0' />
+<text class='muted' x='38' y='94.0'>3.1</text>
+<line class='grid' x1='90' y1='178.0' x2='1080' y2='178.0' />
+<text class='muted' x='38' y='182.0'>2.4</text>
+<line class='grid' x1='90' y1='266.0' x2='1080' y2='266.0' />
+<text class='muted' x='38' y='270.0'>1.8</text>
+<line class='grid' x1='90' y1='354.0' x2='1080' y2='354.0' />
+<text class='muted' x='38' y='358.0'>1.2</text>
+<line class='grid' x1='90' y1='442.0' x2='1080' y2='442.0' />
+<text class='muted' x='38' y='446.0'>0.6</text>
+<line class='grid' x1='90' y1='530.0' x2='1080' y2='530.0' />
+<text class='muted' x='38' y='534.0'>0.0</text>
+<line class='axis' x1='90' y1='530' x2='1080' y2='530' />
+<line class='axis' x1='90' y1='90' x2='90' y2='530' />
+<text class='text' x='247.0' y='560'>1</text>
+<rect x='185.0' y='430.6' width='62.0' height='99.4' fill='#4fd1c5' rx='8' />
+<text class='muted' x='185.0' y='422.6'>0.69</text>
+<rect x='255.0' y='398.6' width='62.0' height='131.4' fill='#c3e88d' rx='8' />
+<text class='muted' x='255.0' y='390.6'>0.912</text>
+<text class='text' x='577.0' y='560'>2</text>
+<rect x='515.0' y='369.1' width='62.0' height='160.9' fill='#4fd1c5' rx='8' />
+<text class='muted' x='515.0' y='361.1'>1.117</text>
+<rect x='585.0' y='307.5' width='62.0' height='222.5' fill='#c3e88d' rx='8' />
+<text class='muted' x='585.0' y='299.5'>1.545</text>
+<text class='text' x='907.0' y='560'>4</text>
+<rect x='845.0' y='209.0' width='62.0' height='321.0' fill='#4fd1c5' rx='8' />
+<text class='muted' x='845.0' y='201.0'>2.229</text>
+<rect x='915.0' y='90.0' width='62.0' height='440.0' fill='#c3e88d' rx='8' />
+<text class='muted' x='915.0' y='82.0'>3.055</text>
+<text class='text' x='510.0' y='588'>Concurrent requests</text>
+<text class='text' transform='translate(24,355.0) rotate(-90)'>Batch makespan (s)</text>
+<circle cx='940' cy='114' r='7' fill='#4fd1c5' />
+<text class='text' x='955' y='118'>Gemma 4 E2B / SFP8</text>
+<circle cx='940' cy='138' r='7' fill='#c3e88d' />
+<text class='text' x='955' y='142'>Gemma 4 26B A4B / SFP8</text>
+</svg>

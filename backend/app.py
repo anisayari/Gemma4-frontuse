@@ -12,18 +12,20 @@ import platform
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import threading
 import time
 import uuid
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 import socket
 from queue import Queue
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import numpy as np
 from piper import PiperVoice
@@ -46,9 +48,11 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DIST_DIR = BASE_DIR / "web" / "dist"
 CACHE_DIR = Path(os.getenv("HF_HOME", BASE_DIR / ".hf-cache"))
 LOG_DIR = BASE_DIR / "logs"
+DATA_DIR = BASE_DIR / "data"
 LOG_PATH = LOG_DIR / "gemma4-lab.log"
 LLAMA_SERVER_LOG_PATH = LOG_DIR / "llama-server.log"
 WSL_VLLM_LOG_PATH = LOG_DIR / "vllm-wsl.log"
+REQUESTS_DB_PATH = DATA_DIR / "gemma4-requests.sqlite3"
 TTS_DIR = BASE_DIR / "tts"
 TTS_VOICE_DIR = TTS_DIR / "voices"
 TTS_GENERATED_DIR = TTS_DIR / "generated"
@@ -121,6 +125,7 @@ QUANTIZATION_NOTE = (
 )
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 TTS_VOICE_DIR.mkdir(parents=True, exist_ok=True)
 TTS_GENERATED_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -319,6 +324,67 @@ class ModelLoadRequest(BaseModel):
     quantization_key: str = DEFAULT_QUANTIZATION_KEY
 
 
+class ApiMediaUrl(BaseModel):
+    url: str
+
+
+class ApiMessageContentPart(BaseModel):
+    type: Literal["text", "image_url", "audio_url"]
+    text: str | None = None
+    image_url: ApiMediaUrl | None = None
+    audio_url: ApiMediaUrl | None = None
+
+
+class ApiChatMessage(BaseModel):
+    role: Literal["system", "user", "assistant", "tool"]
+    content: str | list[ApiMessageContentPart]
+    name: str | None = None
+    tool_call_id: str | None = None
+
+
+class ApiResponseFormat(BaseModel):
+    type: Literal["text", "json_object"] = "text"
+    json_schema: dict[str, Any] | None = None
+
+
+class ApiToolFunctionDefinition(BaseModel):
+    name: str
+    description: str | None = None
+    parameters: dict[str, Any] | None = None
+
+
+class ApiToolDefinition(BaseModel):
+    type: Literal["function"] = "function"
+    function: ApiToolFunctionDefinition
+
+
+class ApiToolChoiceFunction(BaseModel):
+    name: str
+
+
+class ApiToolChoiceObject(BaseModel):
+    type: Literal["function"]
+    function: ApiToolChoiceFunction
+
+
+class ApiChatCompletionRequest(BaseModel):
+    request_id: str | None = None
+    model: str | None = None
+    model_key: str | None = None
+    quantization_key: str | None = None
+    messages: list[ApiChatMessage]
+    max_tokens: int = DEFAULT_MAX_NEW_TOKENS
+    temperature: float = 1.0
+    top_p: float = 0.95
+    top_k: int = 64
+    stream: bool = False
+    thinking: bool = False
+    tts_enabled: bool = False
+    response_format: ApiResponseFormat | None = None
+    tools: list[ApiToolDefinition] | None = None
+    tool_choice: str | ApiToolChoiceObject | None = "auto"
+
+
 def get_model_spec(model_key: str | None) -> dict:
     key = (model_key or DEFAULT_MODEL_KEY).strip().lower()
     spec = MODEL_SPECS_BY_KEY.get(key)
@@ -367,11 +433,123 @@ def serialize_quantization_spec(spec: dict) -> dict:
     }
 
 
+def build_runtime_capabilities(spec: dict | None, quantization_spec: dict | None) -> dict | None:
+    if spec is None or quantization_spec is None:
+        return None
+
+    runtime_family = str(quantization_spec.get("runtime_family") or "")
+    supports_text = bool(spec.get("supports_text", True))
+    supports_image = bool(spec.get("supports_image")) and runtime_family in {
+        "transformers",
+        "llama.cpp",
+        "vllm-wsl",
+    }
+    supports_audio = bool(spec.get("supports_audio")) and runtime_family == "transformers"
+    supported_modalities: list[str] = []
+    if supports_text:
+        supported_modalities.append("text")
+    if supports_image:
+        supported_modalities.append("image")
+    if supports_audio:
+        supported_modalities.append("audio")
+
+    return {
+        "runtime_family": runtime_family,
+        "supported_modalities": supported_modalities,
+        "supports_text": supports_text,
+        "supports_image": supports_image,
+        "supports_audio": supports_audio,
+    }
+
+
 def get_gpu_total_memory_gib() -> float | None:
     if not torch.cuda.is_available():
         return None
 
     return round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
+
+
+def get_gpu_monitor_snapshot() -> dict[str, Any] | None:
+    if not torch.cuda.is_available():
+        return None
+
+    fallback = {
+        "name": torch.cuda.get_device_name(0),
+        "utilization_gpu_percent": None,
+        "utilization_memory_percent": None,
+        "memory_used_gib": round(torch.cuda.memory_reserved() / (1024**3), 2),
+        "memory_total_gib": get_gpu_total_memory_gib(),
+        "temperature_c": None,
+        "power_draw_watts": None,
+        "source": "torch",
+    }
+
+    try:
+        query = ",".join(
+            [
+                "name",
+                "utilization.gpu",
+                "utilization.memory",
+                "memory.used",
+                "memory.total",
+                "temperature.gpu",
+                "power.draw",
+            ]
+        )
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                f"--query-gpu={query}",
+                "--format=csv,noheader,nounits",
+            ],
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode != 0:
+            return fallback
+
+        first_line = next(
+            (line.strip() for line in result.stdout.splitlines() if line.strip()),
+            "",
+        )
+        if not first_line:
+            return fallback
+
+        parts = [part.strip() for part in first_line.split(",")]
+        if len(parts) < 7:
+            return fallback
+
+        def parse_number(value: str) -> float | None:
+            normalized = value.strip().lower()
+            if not normalized or normalized in {"n/a", "[n/a]"}:
+                return None
+            try:
+                return float(value)
+            except ValueError:
+                return None
+
+        memory_used_mib = parse_number(parts[3])
+        memory_total_mib = parse_number(parts[4])
+        return {
+            "name": parts[0] or fallback["name"],
+            "utilization_gpu_percent": parse_number(parts[1]),
+            "utilization_memory_percent": parse_number(parts[2]),
+            "memory_used_gib": round((memory_used_mib or 0.0) / 1024, 2)
+            if memory_used_mib is not None
+            else fallback["memory_used_gib"],
+            "memory_total_gib": round((memory_total_mib or 0.0) / 1024, 2)
+            if memory_total_mib is not None
+            else fallback["memory_total_gib"],
+            "temperature_c": parse_number(parts[5]),
+            "power_draw_watts": parse_number(parts[6]),
+            "source": "nvidia-smi",
+        }
+    except Exception:
+        logger.exception("Failed to collect GPU monitoring snapshot")
+        return fallback
 
 
 class MEMORYSTATUSEX(ctypes.Structure):
@@ -900,6 +1078,433 @@ class LocalTTSService:
         }
 
 
+class InferenceRequestStore:
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = db_path
+        self._lock = threading.RLock()
+        self._initialize()
+
+    def _connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(str(self._db_path), check_same_thread=False)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def _initialize(self) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS inference_requests (
+                    request_id TEXT PRIMARY KEY,
+                    route TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    runtime_family TEXT,
+                    model_key TEXT,
+                    quantization_key TEXT,
+                    stream INTEGER NOT NULL DEFAULT 0,
+                    queue_position INTEGER,
+                    progress_message TEXT,
+                    request_payload_json TEXT,
+                    response_payload_json TEXT,
+                    response_preview TEXT,
+                    error_text TEXT,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    started_at REAL,
+                    finished_at REAL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_inference_requests_created_at
+                ON inference_requests(created_at DESC)
+                """
+            )
+            connection.commit()
+
+    def create_request(
+        self,
+        *,
+        request_id: str,
+        route: str,
+        runtime_family: str | None,
+        model_key: str | None,
+        quantization_key: str | None,
+        stream: bool,
+        request_payload: dict[str, Any],
+        queue_position: int,
+    ) -> None:
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO inference_requests (
+                    request_id,
+                    route,
+                    status,
+                    runtime_family,
+                    model_key,
+                    quantization_key,
+                    stream,
+                    queue_position,
+                    progress_message,
+                    request_payload_json,
+                    created_at,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    request_id,
+                    route,
+                    "queued",
+                    runtime_family,
+                    model_key,
+                    quantization_key,
+                    int(stream),
+                    queue_position,
+                    "Queued for execution.",
+                    json.dumps(request_payload, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+            connection.commit()
+
+    def update_queue_positions(
+        self,
+        *,
+        active_request_id: str | None,
+        queued_request_ids: list[str],
+    ) -> None:
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            if active_request_id is not None:
+                connection.execute(
+                    """
+                    UPDATE inference_requests
+                    SET queue_position = 0, updated_at = ?
+                    WHERE request_id = ? AND status = 'running'
+                    """,
+                    (now, active_request_id),
+                )
+            for index, request_id in enumerate(queued_request_ids, start=1):
+                connection.execute(
+                    """
+                    UPDATE inference_requests
+                    SET queue_position = ?, progress_message = ?, updated_at = ?
+                    WHERE request_id = ? AND status = 'queued'
+                    """,
+                    (index, f"Queued at position {index}.", now, request_id),
+                )
+            connection.commit()
+
+    def mark_running(self, request_id: str, *, message: str) -> None:
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE inference_requests
+                SET status = 'running',
+                    queue_position = 0,
+                    progress_message = ?,
+                    started_at = COALESCE(started_at, ?),
+                    updated_at = ?
+                WHERE request_id = ?
+                """,
+                (message, now, now, request_id),
+            )
+            connection.commit()
+
+    def update_progress(
+        self,
+        request_id: str,
+        *,
+        status: str | None = None,
+        message: str | None = None,
+        response_preview: str | None = None,
+    ) -> None:
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            current = self.get_request(request_id)
+            if current is None:
+                return
+            connection.execute(
+                """
+                UPDATE inference_requests
+                SET status = ?,
+                    progress_message = ?,
+                    response_preview = ?,
+                    updated_at = ?
+                WHERE request_id = ?
+                """,
+                (
+                    status or current["status"],
+                    message if message is not None else current["progress_message"],
+                    response_preview
+                    if response_preview is not None
+                    else current["response_preview"],
+                    now,
+                    request_id,
+                ),
+            )
+            connection.commit()
+
+    def mark_completed(
+        self,
+        request_id: str,
+        *,
+        response_payload: dict[str, Any],
+        response_preview: str | None,
+    ) -> None:
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE inference_requests
+                SET status = 'completed',
+                    queue_position = NULL,
+                    progress_message = 'Completed.',
+                    response_payload_json = ?,
+                    response_preview = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE request_id = ?
+                """,
+                (
+                    json.dumps(response_payload, ensure_ascii=False),
+                    response_preview,
+                    now,
+                    now,
+                    request_id,
+                ),
+            )
+            connection.commit()
+
+    def mark_failed(self, request_id: str, *, error_text: str) -> None:
+        now = time.time()
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE inference_requests
+                SET status = 'failed',
+                    queue_position = NULL,
+                    progress_message = 'Failed.',
+                    error_text = ?,
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE request_id = ?
+                """,
+                (error_text, now, now, request_id),
+            )
+            connection.commit()
+
+    def get_request(self, request_id: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM inference_requests
+                WHERE request_id = ?
+                """,
+                (request_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._serialize_row(row)
+
+    def list_requests(self, *, limit: int = 40) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM inference_requests
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._serialize_row(row) for row in rows]
+
+    def _serialize_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        request_payload = None
+        response_payload = None
+        if row["request_payload_json"]:
+            try:
+                request_payload = json.loads(row["request_payload_json"])
+            except json.JSONDecodeError:
+                request_payload = None
+        if row["response_payload_json"]:
+            try:
+                response_payload = json.loads(row["response_payload_json"])
+            except json.JSONDecodeError:
+                response_payload = None
+
+        return {
+            "request_id": row["request_id"],
+            "route": row["route"],
+            "status": row["status"],
+            "runtime_family": row["runtime_family"],
+            "model_key": row["model_key"],
+            "quantization_key": row["quantization_key"],
+            "stream": bool(row["stream"]),
+            "queue_position": row["queue_position"],
+            "progress_message": row["progress_message"],
+            "request_payload": request_payload,
+            "response_payload": response_payload,
+            "response_preview": row["response_preview"],
+            "error_text": row["error_text"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "started_at": row["started_at"],
+            "finished_at": row["finished_at"],
+            "elapsed_ms": (
+                round((row["finished_at"] - row["started_at"]) * 1000, 1)
+                if row["finished_at"] is not None and row["started_at"] is not None
+                else None
+            ),
+        }
+
+
+class InferenceQueueManager:
+    def __init__(self, request_store: InferenceRequestStore) -> None:
+        self._request_store = request_store
+        self._condition = threading.Condition()
+        self._queued_request_ids: list[str] = []
+        self._active_request_id: str | None = None
+
+    def register_request(
+        self,
+        *,
+        route: str,
+        runtime_family: str | None,
+        model_key: str | None,
+        quantization_key: str | None,
+        stream: bool,
+        request_payload: dict[str, Any],
+        request_id: str | None = None,
+    ) -> str:
+        resolved_request_id = (request_id or uuid.uuid4().hex).strip()
+        with self._condition:
+            self._queued_request_ids.append(resolved_request_id)
+            queue_position = len(self._queued_request_ids)
+            self._request_store.create_request(
+                request_id=resolved_request_id,
+                route=route,
+                runtime_family=runtime_family,
+                model_key=model_key,
+                quantization_key=quantization_key,
+                stream=stream,
+                request_payload=request_payload,
+                queue_position=queue_position,
+            )
+            self._request_store.update_queue_positions(
+                active_request_id=self._active_request_id,
+                queued_request_ids=list(self._queued_request_ids),
+            )
+            logger.info(
+                "Inference request queued request_id=%s route=%s model=%s quantization=%s queue_position=%s",
+                resolved_request_id,
+                route,
+                model_key,
+                quantization_key,
+                queue_position,
+            )
+        return resolved_request_id
+
+    def wait_for_turn(self, request_id: str, *, message: str) -> None:
+        with self._condition:
+            while True:
+                is_first = bool(self._queued_request_ids) and self._queued_request_ids[0] == request_id
+                if self._active_request_id is None and is_first:
+                    self._active_request_id = request_id
+                    self._queued_request_ids.pop(0)
+                    self._request_store.mark_running(request_id, message=message)
+                    self._request_store.update_queue_positions(
+                        active_request_id=self._active_request_id,
+                        queued_request_ids=list(self._queued_request_ids),
+                    )
+                    logger.info("Inference request started request_id=%s", request_id)
+                    return
+                self._request_store.update_queue_positions(
+                    active_request_id=self._active_request_id,
+                    queued_request_ids=list(self._queued_request_ids),
+                )
+                self._condition.wait(timeout=0.25)
+
+    def finish(
+        self,
+        request_id: str,
+        *,
+        response_payload: dict[str, Any] | None = None,
+        response_preview: str | None = None,
+        error_text: str | None = None,
+    ) -> None:
+        with self._condition:
+            if request_id in self._queued_request_ids:
+                self._queued_request_ids = [
+                    queued_request_id
+                    for queued_request_id in self._queued_request_ids
+                    if queued_request_id != request_id
+                ]
+            if self._active_request_id == request_id:
+                self._active_request_id = None
+
+            if error_text is not None:
+                self._request_store.mark_failed(request_id, error_text=error_text)
+                logger.warning(
+                    "Inference request failed request_id=%s error=%s",
+                    request_id,
+                    error_text,
+                )
+            elif response_payload is not None:
+                self._request_store.mark_completed(
+                    request_id,
+                    response_payload=response_payload,
+                    response_preview=response_preview,
+                )
+                logger.info("Inference request completed request_id=%s", request_id)
+
+            self._request_store.update_queue_positions(
+                active_request_id=self._active_request_id,
+                queued_request_ids=list(self._queued_request_ids),
+            )
+            self._condition.notify_all()
+
+    def update_progress(
+        self,
+        request_id: str,
+        *,
+        status: str | None = None,
+        message: str | None = None,
+        response_preview: str | None = None,
+    ) -> None:
+        self._request_store.update_progress(
+            request_id,
+            status=status,
+            message=message,
+            response_preview=response_preview,
+        )
+
+    def snapshot(self) -> dict[str, Any]:
+        with self._condition:
+            active_request = (
+                self._request_store.get_request(self._active_request_id)
+                if self._active_request_id
+                else None
+            )
+            queued_requests = [
+                self._request_store.get_request(request_id)
+                for request_id in self._queued_request_ids
+            ]
+        queued_requests = [request for request in queued_requests if request is not None]
+        return {
+            "active_request_id": self._active_request_id,
+            "active_request": active_request,
+            "queued_count": len(queued_requests),
+            "queued_requests": queued_requests,
+        }
+
+
 class LlamaCppServerRuntime:
     def __init__(self) -> None:
         self._process: subprocess.Popen[str] | None = None
@@ -1130,6 +1735,16 @@ class LlamaCppServerRuntime:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
             raise HTTPException(status_code=exc.code, detail=detail) from exc
+        except ConnectionResetError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The llama.cpp runtime reset the connection while handling this turn. "
+                    "This usually means the media payload was rejected by the underlying "
+                    "runtime or the process crashed during multimodal preprocessing. "
+                    "Check logs/llama-server.log for the exact cause."
+                ),
+            ) from exc
         except urllib.error.URLError as exc:
             raise HTTPException(
                 status_code=503,
@@ -1142,6 +1757,7 @@ class LlamaCppServerRuntime:
         prompt: str,
         system_prompt: str,
         history: list[HistoryTurn],
+        image: Image.Image | None,
     ) -> list[dict]:
         messages: list[dict] = []
         if system_prompt.strip():
@@ -1150,7 +1766,22 @@ class LlamaCppServerRuntime:
         for turn in history:
             messages.append({"role": turn.role, "content": turn.content})
 
-        messages.append({"role": "user", "content": prompt})
+        if image is None:
+            messages.append({"role": "user", "content": prompt})
+            return messages
+
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": pil_image_to_data_url(image)},
+                    },
+                ],
+            }
+        )
         return messages
 
     def generate(
@@ -1161,6 +1792,7 @@ class LlamaCppServerRuntime:
         prompt: str,
         system_prompt: str,
         history: list[HistoryTurn],
+        image: Image.Image | None,
         max_new_tokens: int,
         temperature: float,
         top_p: float,
@@ -1171,6 +1803,7 @@ class LlamaCppServerRuntime:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 history=history,
+                image=image,
             ),
             "stream": False,
             "max_tokens": max_new_tokens,
@@ -1213,6 +1846,7 @@ class LlamaCppServerRuntime:
         prompt: str,
         system_prompt: str,
         history: list[HistoryTurn],
+        image: Image.Image | None,
         max_new_tokens: int,
         temperature: float,
         top_p: float,
@@ -1223,6 +1857,7 @@ class LlamaCppServerRuntime:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 history=history,
+                image=image,
             ),
             "stream": True,
             "max_tokens": max_new_tokens,
@@ -1272,6 +1907,14 @@ class LlamaCppServerRuntime:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
             raise HTTPException(status_code=exc.code, detail=detail) from exc
+        except ConnectionResetError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "The llama.cpp runtime reset the connection while streaming this turn. "
+                    "Check logs/llama-server.log for the exact multimodal failure."
+                ),
+            ) from exc
         except urllib.error.URLError as exc:
             raise HTTPException(
                 status_code=503,
@@ -1886,8 +2529,8 @@ class GemmaService:
             status="idle",
             progress=0,
             message="Select a model and click Load model.",
-            target_model_key=DEFAULT_MODEL_KEY,
-            target_quantization_key=DEFAULT_QUANTIZATION_KEY,
+            target_model_key=None,
+            target_quantization_key=None,
             error=None,
             started_at=None,
             finished_at=None,
@@ -1900,6 +2543,27 @@ class GemmaService:
         if self._runtime_family == "vllm-wsl":
             return self._wsl_vllm_runtime.is_loaded
         return self._processor is not None and self._model is not None
+
+    def current_selection(self) -> dict | None:
+        self._reconcile_runtime_state()
+        if (
+            not self.is_loaded
+            or self._current_model_key is None
+            or self._current_quantization_key is None
+        ):
+            return None
+
+        spec = get_model_spec(self._current_model_key)
+        quantization_spec = get_quantization_spec(self._current_quantization_key)
+        return {
+            "model_key": spec["key"],
+            "quantization_key": quantization_spec["key"],
+            "model": serialize_model_spec(spec),
+            "quantization": serialize_quantization_spec(quantization_spec),
+            "runtime_capabilities": build_runtime_capabilities(spec, quantization_spec),
+            "runtime_family": self._runtime_family,
+            "loaded_at": self.loaded_at,
+        }
 
     def _make_load_state(
         self,
@@ -2051,6 +2715,40 @@ class GemmaService:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         log_runtime_memory_snapshot("service-unload-finished")
+
+    def unload(self) -> dict:
+        load_state = self.get_load_state()
+        if load_state["is_loading"]:
+            target_model = load_state.get("target_model") or {}
+            target_quantization = load_state.get("target_quantization") or {}
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{target_model.get('label', 'A model')} / "
+                    f"{target_quantization.get('label', 'the selected quantization')} is "
+                    "still loading. Wait for it to finish before unloading."
+                ),
+            )
+
+        previous = self.current_selection()
+        with self._load_lock:
+            self._unload_current_model()
+            self._set_load_state(
+                status="idle",
+                progress=0,
+                message="No model is loaded.",
+                target_model_key=None,
+                target_quantization_key=None,
+                error=None,
+                started_at=None,
+                finished_at=None,
+            )
+
+        return {
+            "unloaded": previous is not None,
+            "previous": previous,
+            "health": self.health(),
+        }
 
     def _build_messages(
         self,
@@ -2549,6 +3247,9 @@ class GemmaService:
                 if active_quantization
                 else None
             ),
+            "runtime_capabilities": build_runtime_capabilities(
+                active_spec, active_quantization
+            ),
             "runtime_family": self._runtime_family,
             "tts": tts_service.health(),
             "loaded": self.is_loaded,
@@ -2590,19 +3291,13 @@ class GemmaService:
         top_p: float,
         top_k: int,
         thinking: bool,
+        tools: list[dict[str, Any]] | None = None,
+        override_messages: list[dict[str, Any]] | None = None,
     ) -> dict:
         processor, model, spec, quantization_spec = self.require_loaded_selection(
             model_key, quantization_key
         )
         if self._runtime_family == "llama.cpp":
-            if image is not None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"{spec['label']} in {quantization_spec['label']} is currently wired "
-                        "for fast text chat only in this app build."
-                    ),
-                )
             if audio is not None:
                 raise HTTPException(
                     status_code=400,
@@ -2617,6 +3312,7 @@ class GemmaService:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 history=history,
+                image=image,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_p=top_p,
@@ -2641,7 +3337,7 @@ class GemmaService:
                 temperature=temperature,
                 top_p=top_p,
             )
-        messages = self._build_messages(
+        messages = override_messages or self._build_messages(
             prompt=prompt,
             system_prompt=system_prompt,
             history=history,
@@ -2651,14 +3347,18 @@ class GemmaService:
 
         start_time = time.perf_counter()
         with self._generate_lock:
-            inputs = processor.apply_chat_template(
-                messages,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                add_generation_prompt=True,
-                enable_thinking=thinking,
-            ).to(model.device)
+            chat_template_kwargs = {
+                "tokenize": True,
+                "return_dict": True,
+                "return_tensors": "pt",
+                "add_generation_prompt": True,
+                "enable_thinking": thinking,
+            }
+            if tools:
+                chat_template_kwargs["tools"] = tools
+            inputs = processor.apply_chat_template(messages, **chat_template_kwargs).to(
+                model.device
+            )
             input_len = int(inputs["input_ids"].shape[-1])
             generation_kwargs = self._build_generation_kwargs(
                 max_new_tokens=max_new_tokens,
@@ -2697,19 +3397,13 @@ class GemmaService:
         top_k: int,
         thinking: bool,
         tts_enabled: bool,
+        tools: list[dict[str, Any]] | None = None,
+        override_messages: list[dict[str, Any]] | None = None,
     ):
         processor, model, spec, quantization_spec = self.require_loaded_selection(
             model_key, quantization_key
         )
         if self._runtime_family == "llama.cpp":
-            if image is not None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"{spec['label']} in {quantization_spec['label']} is currently wired "
-                        "for fast text chat only in this app build."
-                    ),
-                )
             if audio is not None:
                 raise HTTPException(
                     status_code=400,
@@ -2724,6 +3418,7 @@ class GemmaService:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 history=history,
+                image=image,
                 max_new_tokens=max_new_tokens,
                 temperature=temperature,
                 top_p=top_p,
@@ -2752,7 +3447,7 @@ class GemmaService:
                 tts_enabled=tts_enabled,
             )
             return
-        messages = self._build_messages(
+        messages = override_messages or self._build_messages(
             prompt=prompt,
             system_prompt=system_prompt,
             history=history,
@@ -2762,14 +3457,18 @@ class GemmaService:
 
         start_time = time.perf_counter()
         with self._generate_lock:
-            inputs = processor.apply_chat_template(
-                messages,
-                tokenize=True,
-                return_dict=True,
-                return_tensors="pt",
-                add_generation_prompt=True,
-                enable_thinking=thinking,
-            ).to(model.device)
+            chat_template_kwargs = {
+                "tokenize": True,
+                "return_dict": True,
+                "return_tensors": "pt",
+                "add_generation_prompt": True,
+                "enable_thinking": thinking,
+            }
+            if tools:
+                chat_template_kwargs["tools"] = tools
+            inputs = processor.apply_chat_template(messages, **chat_template_kwargs).to(
+                model.device
+            )
             input_len = int(inputs["input_ids"].shape[-1])
             generation_kwargs = self._build_generation_kwargs(
                 max_new_tokens=max_new_tokens,
@@ -2852,6 +3551,11 @@ def extract_reply(parsed: object) -> dict:
         thought = parsed.get("thought")
         answer = parsed.get("answer")
         content = parsed.get("content")
+        if answer is None and content is None and parsed.get("tool_calls"):
+            return {
+                "reply": "",
+                "thought": thought,
+            }
         return {
             "reply": answer or content or str(parsed),
             "thought": thought,
@@ -2871,15 +3575,31 @@ def decode_history(history_json: str) -> list[HistoryTurn]:
         raise HTTPException(status_code=400, detail=f"Invalid history payload: {exc}") from exc
 
 
+def load_image_bytes(data: bytes) -> Image.Image:
+    try:
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+    except UnidentifiedImageError as exc:
+        raise HTTPException(status_code=400, detail="Unsupported image file.") from exc
+
+    min_width = max(2, image.width)
+    min_height = max(2, image.height)
+    if min_width != image.width or min_height != image.height:
+        logger.info(
+            "Upscaling tiny image for multimodal runtime original=%sx%s resized=%sx%s",
+            image.width,
+            image.height,
+            min_width,
+            min_height,
+        )
+        image = image.resize((min_width, min_height), Image.Resampling.BICUBIC)
+
+    return image
+
+
 def load_image(upload: UploadFile | None) -> Image.Image | None:
     if upload is None:
         return None
-
-    try:
-        data = upload.file.read()
-        return Image.open(io.BytesIO(data)).convert("RGB")
-    except UnidentifiedImageError as exc:
-        raise HTTPException(status_code=400, detail="Unsupported image file.") from exc
+    return load_image_bytes(upload.file.read())
 
 
 def resample_audio(audio: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
@@ -2897,12 +3617,8 @@ def resample_audio(audio: np.ndarray, source_rate: int, target_rate: int) -> np.
     return np.interp(new_positions, old_positions, audio).astype(np.float32)
 
 
-def load_audio(upload: UploadFile | None, target_rate: int) -> np.ndarray | None:
-    if upload is None:
-        return None
-
+def load_audio_bytes(data: bytes, target_rate: int) -> np.ndarray:
     try:
-        data = upload.file.read()
         audio, sample_rate = sf.read(io.BytesIO(data), dtype="float32")
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail="Unsupported audio file.") from exc
@@ -2914,6 +3630,12 @@ def load_audio(upload: UploadFile | None, target_rate: int) -> np.ndarray | None
         raise HTTPException(status_code=400, detail="Audio file is empty.")
 
     return resample_audio(audio, sample_rate, target_rate)
+
+
+def load_audio(upload: UploadFile | None, target_rate: int) -> np.ndarray | None:
+    if upload is None:
+        return None
+    return load_audio_bytes(upload.file.read(), target_rate)
 
 
 def prepare_generation_request(
@@ -2936,15 +3658,6 @@ def prepare_generation_request(
         audio is not None,
     )
     history = decode_history(history_json)
-
-    if quantization_spec.get("runtime_family") == "llama.cpp" and image is not None:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"{spec['label']} in {quantization_spec['label']} is currently wired for "
-                "fast text chat only in this app build."
-            ),
-        )
 
     if quantization_spec.get("runtime_family") == "llama.cpp" and audio is not None:
         raise HTTPException(
@@ -3000,6 +3713,732 @@ def prepare_generation_request(
     )
 
 
+def strip_code_fence(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2:
+            return "\n".join(lines[1:-1]).strip()
+    return cleaned
+
+
+def parse_json_fragment(text: str) -> Any | None:
+    cleaned = strip_code_fence(text)
+    if not cleaned:
+        return None
+
+    decoder = json.JSONDecoder()
+    for start_index, character in enumerate(cleaned):
+        if character not in "{[":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(cleaned[start_index:])
+            return parsed
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def read_binary_from_source(source: str, *, media_label: str) -> bytes:
+    normalized = (source or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail=f"Empty {media_label} source.")
+
+    if normalized.startswith("data:"):
+        try:
+            header, encoded = normalized.split(",", 1)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Malformed {media_label} data URL.",
+            ) from exc
+        if ";base64" not in header.lower():
+            raise HTTPException(
+                status_code=400,
+                detail=f"{media_label.capitalize()} data URLs must be base64 encoded.",
+            )
+        try:
+            return base64.b64decode(encoded, validate=True)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid base64 payload for {media_label}.",
+            ) from exc
+
+    parsed_url = urllib.parse.urlparse(normalized)
+    if parsed_url.scheme in {"http", "https"}:
+        request = urllib.request.Request(
+            normalized,
+            method="GET",
+            headers={"User-Agent": "gemma4-lab-local-api/1.0"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                return response.read()
+        except Exception as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Could not fetch {media_label} from {normalized}.",
+            ) from exc
+
+    if parsed_url.scheme == "file":
+        raw_path = urllib.request.url2pathname(urllib.parse.unquote(parsed_url.path))
+        if re.match(r"^/[A-Za-z]:/", raw_path):
+            raw_path = raw_path[1:]
+        if parsed_url.netloc:
+            raw_path = f"//{parsed_url.netloc}{raw_path}"
+        path = Path(raw_path)
+    else:
+        path = Path(normalized)
+        if not path.is_absolute():
+            path = (BASE_DIR / path).resolve()
+
+    if not path.exists() or not path.is_file():
+        raise HTTPException(
+            status_code=400,
+            detail=f"{media_label.capitalize()} source does not exist: {path}",
+        )
+
+    try:
+        return path.read_bytes()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not read {media_label} source: {path}",
+        ) from exc
+
+
+def normalize_api_tool_choice(
+    tool_choice: str | ApiToolChoiceObject | None,
+) -> dict[str, str | None]:
+    if isinstance(tool_choice, ApiToolChoiceObject):
+        return {"mode": "function", "name": tool_choice.function.name}
+
+    normalized = (tool_choice or "auto").strip().lower() if isinstance(tool_choice, str) else "auto"
+    if normalized in {"auto", "none", "required"}:
+        return {"mode": normalized, "name": None}
+    return {"mode": "auto", "name": None}
+
+
+def normalize_api_tools(tools: list[ApiToolDefinition] | None) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for tool in tools or []:
+        normalized.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.function.name,
+                    "description": tool.function.description or "",
+                    "parameters": tool.function.parameters
+                    or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return normalized
+
+
+def build_json_response_instruction(response_format: ApiResponseFormat | None) -> str:
+    if response_format is None or response_format.type != "json_object":
+        return ""
+
+    lines = [
+        "Return only a valid JSON object.",
+        "Do not use markdown fences, prose before the JSON, or prose after the JSON.",
+    ]
+    if response_format.json_schema:
+        lines.append("Follow this JSON Schema as closely as possible:")
+        lines.append(json.dumps(response_format.json_schema, ensure_ascii=False))
+    return "\n".join(lines)
+
+
+def build_tool_prompt_instruction(
+    tools: list[dict[str, Any]],
+    tool_choice: dict[str, str | None],
+) -> str:
+    if not tools:
+        return ""
+
+    lines = [
+        "You have access to functions.",
+        (
+            "If you decide to call a function, return JSON only. Use either "
+            '{"name":"function_name","parameters":{...}} for one call or '
+            '{"tool_calls":[{"name":"function_name","parameters":{...}}]} for '
+            "multiple calls."
+        ),
+        "Do not add commentary around a function call response.",
+    ]
+    if tool_choice["mode"] == "none":
+        lines.insert(0, "Do not call any function for this turn. Answer directly.")
+    elif tool_choice["mode"] == "required":
+        lines.insert(0, "You must call at least one function for this turn.")
+    elif tool_choice["mode"] == "function" and tool_choice["name"]:
+        lines.insert(
+            0,
+            f'If you call a function for this turn, it must be "{tool_choice["name"]}".',
+        )
+
+    tool_definitions = [tool["function"] for tool in tools]
+    lines.append(json.dumps(tool_definitions, ensure_ascii=False))
+    return "\n".join(lines)
+
+
+def merge_system_prompt_sections(*sections: str) -> str:
+    normalized = [section.strip() for section in sections if section and section.strip()]
+    return "\n\n".join(normalized).strip() or DEFAULT_SYSTEM_PROMPT
+
+
+def parse_api_message_content(
+    content: str | list[ApiMessageContentPart],
+    *,
+    target_audio_rate: int,
+) -> tuple[str, Image.Image | None, np.ndarray | None]:
+    if isinstance(content, str):
+        return content.strip(), None, None
+
+    text_parts: list[str] = []
+    image_payload: Image.Image | None = None
+    audio_payload: np.ndarray | None = None
+
+    for part in content:
+        if part.type == "text":
+            if part.text and part.text.strip():
+                text_parts.append(part.text.strip())
+            continue
+
+        if part.type == "image_url":
+            if image_payload is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only one image is supported per chat completion request.",
+                )
+            if part.image_url is None or not part.image_url.url.strip():
+                raise HTTPException(status_code=400, detail="Image URL is missing.")
+            image_payload = load_image_bytes(
+                read_binary_from_source(part.image_url.url, media_label="image")
+            )
+            continue
+
+        if part.type == "audio_url":
+            if audio_payload is not None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Only one audio clip is supported per chat completion request.",
+                )
+            if part.audio_url is None or not part.audio_url.url.strip():
+                raise HTTPException(status_code=400, detail="Audio URL is missing.")
+            audio_payload = load_audio_bytes(
+                read_binary_from_source(part.audio_url.url, media_label="audio"),
+                target_audio_rate,
+            )
+
+    return "\n\n".join(text_parts).strip(), image_payload, audio_payload
+
+
+def normalize_function_arguments(arguments: Any) -> tuple[str, Any]:
+    if isinstance(arguments, str):
+        try:
+            parsed_arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            parsed_arguments = None
+        return arguments, parsed_arguments
+
+    normalized_arguments = arguments if isinstance(arguments, dict) else {}
+    return json.dumps(normalized_arguments, ensure_ascii=False), normalized_arguments
+
+
+def normalize_tool_call_items(candidate: Any) -> list[dict[str, Any]]:
+    if candidate is None:
+        return []
+
+    if isinstance(candidate, dict):
+        if isinstance(candidate.get("tool_calls"), list):
+            return normalize_tool_call_items(candidate["tool_calls"])
+
+        if candidate.get("type") == "function" and isinstance(candidate.get("function"), dict):
+            function_payload = candidate["function"]
+            function_name = function_payload.get("name")
+            if function_name:
+                arguments_text, parsed_arguments = normalize_function_arguments(
+                    function_payload.get("arguments", {})
+                )
+                return [
+                    {
+                        "id": candidate.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                        "type": "function",
+                        "function": {
+                            "name": function_name,
+                            "arguments": arguments_text,
+                        },
+                        "parsed_arguments": parsed_arguments,
+                    }
+                ]
+
+        function_name = candidate.get("name")
+        if function_name:
+            arguments_text, parsed_arguments = normalize_function_arguments(
+                candidate.get("parameters", candidate.get("arguments", candidate.get("args", {})))
+            )
+            return [
+                {
+                    "id": candidate.get("id") or f"call_{uuid.uuid4().hex[:24]}",
+                    "type": "function",
+                    "function": {
+                        "name": function_name,
+                        "arguments": arguments_text,
+                    },
+                    "parsed_arguments": parsed_arguments,
+                }
+            ]
+        return []
+
+    if isinstance(candidate, list):
+        normalized: list[dict[str, Any]] = []
+        for item in candidate:
+            normalized.extend(normalize_tool_call_items(item))
+        return normalized
+
+    return []
+
+
+def infer_tool_calls_from_response(parsed: Any, raw_response: str, reply: str) -> list[dict[str, Any]]:
+    tool_calls = normalize_tool_call_items(parsed)
+    if tool_calls:
+        return tool_calls
+
+    parsed_json = parse_json_fragment(raw_response) or parse_json_fragment(reply)
+    return normalize_tool_call_items(parsed_json)
+
+
+def build_local_api_capabilities() -> dict[str, Any]:
+    return {
+        "base_url": "http://127.0.0.1:8000",
+        "control_routes": {
+            "health": "/api/v1/health",
+            "status": "/api/v1/status",
+            "models": "/api/v1/models",
+            "current_model": "/api/v1/models/current",
+            "load_model": "/api/v1/models/load",
+            "unload_model": "/api/v1/models/unload",
+            "load_status": "/api/v1/models/load-status",
+            "capabilities": "/api/v1/capabilities",
+            "monitoring": "/api/v1/monitoring",
+            "requests": "/api/v1/requests",
+            "async_chat_submit": "/api/v1/requests/chat/completions",
+        },
+        "openai_compatible_routes": {
+            "models": "/v1/models",
+            "chat_completions": "/v1/chat/completions",
+        },
+        "structured_output": {
+            "text": {"supported": True},
+            "json_object": {
+                "supported": True,
+                "mode": "best_effort",
+                "notes": (
+                    "Gemma supports prompt-based structured output. This gateway can ask for "
+                    "JSON-only output and validates it after generation, but it does not "
+                    "provide hard constrained decoding."
+                ),
+            },
+        },
+        "tool_calling": {
+            "supported": True,
+            "execution_supported": False,
+            "native_transformers_support": True,
+            "other_runtimes_mode": "prompted_best_effort",
+            "notes": (
+                "Gemma can emit function-call-shaped text, but the caller must execute the "
+                "tool. The Transformers path can also use the official chat template "
+                "tool definitions."
+            ),
+        },
+        "multimodal_input": {
+            "latest_user_turn_only": True,
+            "accepted_content_parts": ["text", "image_url", "audio_url"],
+            "supported_media_sources": ["data_url", "file_url", "absolute_path", "http_url"],
+            "audio_runtime_note": "Audio input only works on E2B/E4B and only on the Transformers path.",
+        },
+        "request_queue": {
+            "enabled": True,
+            "persistence": "sqlite",
+            "batching": {
+                "enabled": False,
+                "notes": (
+                    "This lab currently serializes GPU inference requests across runtimes. "
+                    "Mixed local runtimes and multimodal payloads are tracked in a unified "
+                    "queue, but not batch-merged."
+                ),
+            },
+        },
+    }
+
+
+def resolve_api_model_selection(
+    request: ApiChatCompletionRequest,
+) -> tuple[dict, dict]:
+    selected_model_key = request.model_key
+    selected_quantization_key = request.quantization_key
+
+    if request.model:
+        model_reference = request.model.strip()
+        if ":" in model_reference:
+            model_reference, inferred_quantization = model_reference.rsplit(":", 1)
+            if not selected_quantization_key:
+                selected_quantization_key = inferred_quantization.strip()
+
+        lowered_reference = model_reference.strip().lower()
+        matched_spec = None
+        for spec in MODEL_SPECS:
+            if lowered_reference in {
+                spec["key"],
+                spec["hf_model_id"].lower(),
+                spec["label"].lower(),
+            }:
+                matched_spec = spec
+                break
+
+        if matched_spec is None:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown model reference: {request.model}",
+            )
+        selected_model_key = matched_spec["key"]
+
+    current_selection = service.current_selection()
+    if current_selection is not None:
+        if not selected_model_key:
+            selected_model_key = current_selection["model_key"]
+        if not selected_quantization_key:
+            selected_quantization_key = current_selection["quantization_key"]
+
+    spec = get_model_spec(selected_model_key or DEFAULT_MODEL_KEY)
+    quantization_spec = get_quantization_spec(
+        selected_quantization_key or DEFAULT_QUANTIZATION_KEY
+    )
+    return spec, quantization_spec
+
+
+def prepare_api_chat_completion_request(
+    request: ApiChatCompletionRequest,
+) -> dict[str, Any]:
+    if not request.messages:
+        raise HTTPException(status_code=400, detail="At least one message is required.")
+
+    spec, quantization_spec = resolve_api_model_selection(request)
+    processor, _, _, _ = service.require_loaded_selection(
+        spec["key"], quantization_spec["key"]
+    )
+    target_audio_rate = getattr(
+        getattr(processor, "feature_extractor", None),
+        "sampling_rate",
+        16000,
+    )
+    normalized_tools = normalize_api_tools(request.tools)
+    tool_choice = normalize_api_tool_choice(request.tool_choice)
+
+    final_message = request.messages[-1]
+    if final_message.role != "user":
+        raise HTTPException(
+            status_code=400,
+            detail="The last message must be a user message for this local chat endpoint.",
+        )
+
+    system_sections: list[str] = []
+    history: list[HistoryTurn] = []
+    runtime_messages: list[dict[str, Any]] = []
+
+    prompt = ""
+    image_payload: Image.Image | None = None
+    audio_payload: np.ndarray | None = None
+
+    for index, message in enumerate(request.messages):
+        text_content, message_image, message_audio = parse_api_message_content(
+            message.content,
+            target_audio_rate=target_audio_rate,
+        )
+
+        if message.role == "system":
+            if text_content:
+                system_sections.append(text_content)
+                runtime_messages.append(
+                    {
+                        "role": "system",
+                        "content": [{"type": "text", "text": text_content}],
+                    }
+                )
+            continue
+
+        is_last_turn = index == len(request.messages) - 1
+        if is_last_turn:
+            prompt = text_content
+            image_payload = message_image
+            audio_payload = message_audio
+            latest_content: list[dict[str, Any]] = []
+            if message_image is not None:
+                latest_content.append({"type": "image", "image": message_image})
+            if message_audio is not None:
+                latest_content.append({"type": "audio", "audio": message_audio})
+            latest_content.append({"type": "text", "text": prompt})
+            runtime_messages.append({"role": "user", "content": latest_content})
+            continue
+
+        history_text = text_content.strip()
+        if message.role in {"user", "assistant"} and history_text:
+            history.append(HistoryTurn(role=message.role, content=history_text))
+            runtime_messages.append(
+                {
+                    "role": message.role,
+                    "content": [{"type": "text", "text": history_text}],
+                }
+            )
+        elif message.role == "tool" and history_text:
+            tool_context = f"Tool result:\n{history_text}"
+            history.append(HistoryTurn(role="assistant", content=tool_context))
+            runtime_messages.append(
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": tool_context}],
+                }
+            )
+
+    if image_payload is not None and not spec["supports_image"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{spec['label']} does not support image input in the official tables.",
+        )
+    if audio_payload is not None and not spec["supports_audio"]:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{spec['label']} does not support audio input according to the official "
+                "Gemma 4 Supported Modalities tables."
+            ),
+        )
+    if quantization_spec.get("runtime_family") in {"llama.cpp", "vllm-wsl"} and audio_payload is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{spec['label']} in {quantization_spec['label']} does not support audio "
+                "input in this runtime path."
+            ),
+        )
+
+    normalized_prompt = prompt.strip()
+    if not normalized_prompt:
+        if image_payload is not None and audio_payload is not None:
+            normalized_prompt = "Describe the image and transcribe the audio."
+        elif image_payload is not None:
+            normalized_prompt = "Describe this image."
+        elif audio_payload is not None:
+            normalized_prompt = "Transcribe this audio."
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="A user text prompt, image, or audio clip is required.",
+            )
+
+        last_runtime_message = runtime_messages[-1]
+        last_runtime_message["content"][-1]["text"] = normalized_prompt
+
+    runtime_family = quantization_spec.get("runtime_family")
+    system_prompt = merge_system_prompt_sections(
+        *system_sections,
+        build_json_response_instruction(request.response_format),
+        (
+            build_tool_prompt_instruction(normalized_tools, tool_choice)
+            if runtime_family != "transformers"
+            else ""
+        ),
+    )
+
+    if runtime_messages and runtime_messages[0]["role"] == "system":
+        runtime_messages[0]["content"] = [{"type": "text", "text": system_prompt}]
+    else:
+        runtime_messages.insert(
+            0,
+            {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
+        )
+
+    return {
+        "spec": spec,
+        "quantization_spec": quantization_spec,
+        "prompt": normalized_prompt,
+        "system_prompt": system_prompt,
+        "history": history[-8:],
+        "image": image_payload,
+        "audio": audio_payload,
+        "tools": normalized_tools,
+        "tool_choice": tool_choice,
+        "runtime_messages": runtime_messages,
+    }
+
+
+def build_chat_completion_usage(response_payload: dict[str, Any]) -> dict[str, int] | None:
+    prompt_tokens = response_payload.get("prompt_tokens")
+    completion_tokens = response_payload.get("generated_tokens")
+    if not isinstance(prompt_tokens, int) and not isinstance(completion_tokens, int):
+        return None
+    return {
+        "prompt_tokens": int(prompt_tokens or 0),
+        "completion_tokens": int(completion_tokens or 0),
+        "total_tokens": int(prompt_tokens or 0) + int(completion_tokens or 0),
+    }
+
+
+def build_chat_completion_response(
+    *,
+    request: ApiChatCompletionRequest,
+    prepared: dict[str, Any],
+    response_payload: dict[str, Any],
+    request_id: str | None = None,
+    completion_id: str | None = None,
+    created_at: int | None = None,
+) -> dict[str, Any]:
+    completion_id = completion_id or f"chatcmpl_{uuid.uuid4().hex}"
+    created_at = created_at or int(time.time())
+    tool_calls = infer_tool_calls_from_response(
+        response_payload.get("parsed"),
+        str(response_payload.get("raw_response") or ""),
+        str(response_payload.get("reply") or ""),
+    )
+    finish_reason = str(response_payload.get("finish_reason") or "stop")
+    if tool_calls and not str(response_payload.get("reply") or "").strip():
+        finish_reason = "tool_calls"
+
+    structured_output = None
+    structured_output_error = None
+    if request.response_format is not None and request.response_format.type == "json_object":
+        parsed_json = parse_json_fragment(str(response_payload.get("raw_response") or ""))
+        if parsed_json is None:
+            parsed_json = parse_json_fragment(str(response_payload.get("reply") or ""))
+        if isinstance(parsed_json, dict):
+            structured_output = parsed_json
+        else:
+            structured_output_error = "The model did not return a valid JSON object."
+
+    usage = build_chat_completion_usage(response_payload)
+    model_id = (
+        f"{prepared['spec']['key']}:{prepared['quantization_spec']['key']}"
+    )
+    message: dict[str, Any] = {
+        "role": "assistant",
+        "content": response_payload.get("reply") or "",
+    }
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+
+    return {
+        "request_id": request_id,
+        "status_url": f"/api/v1/requests/{request_id}" if request_id else None,
+        "id": completion_id,
+        "object": "chat.completion",
+        "created": created_at,
+        "model": model_id,
+        "choices": [
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": finish_reason,
+            }
+        ],
+        "usage": usage,
+        "structured_output": structured_output,
+        "structured_output_error": structured_output_error,
+        "gemma_lab": {
+            "request_id": request_id,
+            "status_url": f"/api/v1/requests/{request_id}" if request_id else None,
+            "runtime_family": service.health()["runtime_family"],
+            "active_model_key": response_payload.get("active_model_key"),
+            "active_quantization_key": response_payload.get("active_quantization_key"),
+            "thought": response_payload.get("thought"),
+            "raw_response": response_payload.get("raw_response"),
+            "elapsed_ms": response_payload.get("elapsed_ms"),
+            "hit_max_tokens": response_payload.get("hit_max_tokens"),
+            "max_new_tokens_requested": response_payload.get("max_new_tokens_requested"),
+            "tts_audio": response_payload.get("tts_audio"),
+            "tts_audio_error": response_payload.get("tts_audio_error"),
+        },
+    }
+
+
+def encode_sse_payload(payload: dict[str, Any] | str) -> bytes:
+    if isinstance(payload, str):
+        body = payload
+    else:
+        body = json.dumps(payload, ensure_ascii=False)
+    return f"data: {body}\n\n".encode("utf-8")
+
+
+def summarize_prompt_text(text: str, *, limit: int = 280) -> str:
+    normalized = WHITESPACE_PATTERN.sub(" ", (text or "").strip())
+    if len(normalized) <= limit:
+        return normalized
+    return normalized[: limit - 3].rstrip() + "..."
+
+
+def build_request_payload_summary(
+    *,
+    route: str,
+    model_key: str,
+    quantization_key: str,
+    runtime_family: str | None,
+    prompt: str,
+    system_prompt: str,
+    history_turns: int,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    top_k: int,
+    thinking: bool,
+    has_image: bool,
+    has_audio: bool,
+    stream: bool,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "route": route,
+        "model_key": model_key,
+        "quantization_key": quantization_key,
+        "runtime_family": runtime_family,
+        "prompt_preview": summarize_prompt_text(prompt),
+        "system_prompt_preview": summarize_prompt_text(system_prompt, limit=180),
+        "history_turns": history_turns,
+        "max_new_tokens": max_new_tokens,
+        "temperature": temperature,
+        "top_p": top_p,
+        "top_k": top_k,
+        "thinking": thinking,
+        "has_image": has_image,
+        "has_audio": has_audio,
+        "stream": stream,
+        "prompt_chars": len(prompt or ""),
+        "system_prompt_chars": len(system_prompt or ""),
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def build_monitoring_snapshot(*, recent_limit: int = 24) -> dict[str, Any]:
+    commit_snapshot = get_windows_commit_snapshot()
+    gpu_snapshot = get_gpu_monitor_snapshot()
+    queue_snapshot = request_queue.snapshot()
+    return {
+        "health": service.health(),
+        "current_model": service.current_selection(),
+        "gpu": gpu_snapshot,
+        "memory": commit_snapshot,
+        "queue": queue_snapshot,
+        "recent_requests": request_store.list_requests(limit=recent_limit),
+        "database": {
+            "path": str(REQUESTS_DB_PATH),
+        },
+    }
+
+
+request_store = InferenceRequestStore(REQUESTS_DB_PATH)
+request_queue = InferenceQueueManager(request_store)
 service = GemmaService()
 tts_service = LocalTTSService()
 app = FastAPI(title="Gemma 4 Lab")
@@ -3047,6 +4486,514 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
             )
         },
     )
+
+
+@app.get("/api/v1/health")
+def api_v1_health() -> dict:
+    return service.health()
+
+
+@app.get("/api/v1/status")
+def api_v1_status() -> dict:
+    return {
+        "health": service.health(),
+        "current_model": service.current_selection(),
+        "queue": request_queue.snapshot(),
+        "capabilities": build_local_api_capabilities(),
+    }
+
+
+@app.get("/api/v1/capabilities")
+def api_v1_capabilities() -> dict:
+    return build_local_api_capabilities()
+
+
+@app.get("/api/v1/models")
+def api_v1_models() -> dict:
+    return {
+        "current_model": service.current_selection(),
+        "load_state": service.get_load_state(),
+        "models": [serialize_model_spec(spec) for spec in MODEL_SPECS],
+        "quantizations": [serialize_quantization_spec(spec) for spec in QUANTIZATION_SPECS],
+    }
+
+
+@app.get("/api/v1/models/current")
+def api_v1_current_model() -> dict:
+    return {
+        "loaded": service.is_loaded,
+        "current_model": service.current_selection(),
+        "load_state": service.get_load_state(),
+    }
+
+
+@app.get("/api/v1/models/load-status")
+def api_v1_model_load_status() -> dict:
+    return {
+        "load_state": service.get_load_state(),
+        "current_model": service.current_selection(),
+    }
+
+
+@app.get("/api/v1/monitoring")
+def api_v1_monitoring() -> dict:
+    return build_monitoring_snapshot()
+
+
+@app.get("/api/v1/requests")
+def api_v1_list_requests(limit: int = 40) -> dict:
+    return {
+        "requests": request_store.list_requests(limit=max(1, min(limit, 200))),
+        "queue": request_queue.snapshot(),
+    }
+
+
+@app.get("/api/v1/requests/{request_id}")
+def api_v1_get_request(request_id: str) -> dict:
+    request_row = request_store.get_request(request_id)
+    if request_row is None:
+        raise HTTPException(status_code=404, detail="Request ID not found.")
+    return {
+        "request": request_row,
+        "queue": request_queue.snapshot(),
+    }
+
+
+@app.post("/api/v1/models/load")
+def api_v1_load_model(request: ModelLoadRequest) -> dict:
+    logger.info(
+        "External API model load requested key=%s quantization=%s",
+        request.model_key,
+        request.quantization_key,
+    )
+    load_result = service.start_load(request.model_key, request.quantization_key)
+    return {
+        "accepted": load_result["accepted"],
+        "message": load_result["message"],
+        "load_state": load_result["load_state"],
+        "current_model": service.current_selection(),
+        "health": service.health(),
+    }
+
+
+@app.post("/api/v1/models/unload")
+def api_v1_unload_model() -> dict:
+    logger.info("External API unload requested")
+    return service.unload()
+
+
+@app.get("/v1/models")
+def openai_compatible_models() -> dict:
+    current_selection = service.current_selection()
+    data = []
+    for model_spec in MODEL_SPECS:
+        supported_quantization_keys = [
+            key
+            for key in model_spec["memory_requirements_gib"].keys()
+            if key in QUANTIZATION_SPECS_BY_KEY
+        ]
+        if model_spec["key"] == "31b-nvfp4" and "nvfp4" not in supported_quantization_keys:
+            supported_quantization_keys.append("nvfp4")
+
+        for quantization_key in supported_quantization_keys:
+            quantization_spec = get_quantization_spec(quantization_key)
+            data.append(
+                {
+                    "id": f"{model_spec['key']}:{quantization_spec['key']}",
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "gemma4-lab",
+                    "root": model_spec["hf_model_id"],
+                    "permission": [],
+                    "runtime_family": quantization_spec["runtime_family"],
+                    "loaded": (
+                        current_selection is not None
+                        and current_selection["model_key"] == model_spec["key"]
+                        and current_selection["quantization_key"] == quantization_spec["key"]
+                    ),
+                }
+            )
+
+    return {"object": "list", "data": data}
+
+
+@app.post("/api/v1/chat/completions")
+@app.post("/v1/chat/completions")
+def api_v1_chat_completions(request: ApiChatCompletionRequest):
+    prepared = prepare_api_chat_completion_request(request)
+    spec = prepared["spec"]
+    quantization_spec = prepared["quantization_spec"]
+    request_id = request_queue.register_request(
+        route="/v1/chat/completions",
+        runtime_family=quantization_spec.get("runtime_family"),
+        model_key=spec["key"],
+        quantization_key=quantization_spec["key"],
+        stream=request.stream,
+        request_payload=build_request_payload_summary(
+            route="/v1/chat/completions",
+            model_key=spec["key"],
+            quantization_key=quantization_spec["key"],
+            runtime_family=quantization_spec.get("runtime_family"),
+            prompt=prepared["prompt"],
+            system_prompt=prepared["system_prompt"],
+            history_turns=len(prepared["history"]),
+            max_new_tokens=max(32, min(int(request.max_tokens), 1024)),
+            temperature=max(0.0, min(float(request.temperature), 2.0)),
+            top_p=max(0.1, min(float(request.top_p), 1.0)),
+            top_k=max(1, min(int(request.top_k), 128)),
+            thinking=request.thinking,
+            has_image=prepared["image"] is not None,
+            has_audio=prepared["audio"] is not None,
+            stream=request.stream,
+            extra={
+                "tool_count": len(prepared["tools"]),
+                "response_format": request.response_format.type
+                if request.response_format
+                else "text",
+            },
+        ),
+        request_id=request.request_id,
+    )
+    logger.info(
+        "External chat completion requested request_id=%s key=%s quantization=%s stream=%s thinking=%s json_mode=%s tools=%s prompt_chars=%s history_turns=%s image=%s audio=%s",
+        request_id,
+        spec["key"],
+        quantization_spec["key"],
+        request.stream,
+        request.thinking,
+        request.response_format.type if request.response_format else "text",
+        len(prepared["tools"]),
+        len(prepared["prompt"]),
+        len(prepared["history"]),
+        prepared["image"] is not None,
+        prepared["audio"] is not None,
+    )
+
+    runtime_messages = (
+        prepared["runtime_messages"]
+        if quantization_spec.get("runtime_family") == "transformers"
+        else None
+    )
+
+    if request.stream:
+        completion_id = f"chatcmpl_{uuid.uuid4().hex}"
+        created_at = int(time.time())
+        model_id = f"{spec['key']}:{quantization_spec['key']}"
+
+        def event_stream():
+            preview_text = ""
+            try:
+                request_queue.wait_for_turn(
+                    request_id,
+                    message="Generating streamed response.",
+                )
+                yield encode_sse_payload(
+                    {
+                        "request_id": request_id,
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created_at,
+                        "model": model_id,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant"},
+                                "finish_reason": None,
+                            }
+                        ],
+                    }
+                )
+                for event in service.stream_generate(
+                    model_key=spec["key"],
+                    quantization_key=quantization_spec["key"],
+                    prompt=prepared["prompt"],
+                    system_prompt=prepared["system_prompt"],
+                    history=prepared["history"],
+                    image=prepared["image"],
+                    audio=prepared["audio"],
+                    max_new_tokens=max(32, min(int(request.max_tokens), 1024)),
+                    temperature=max(0.0, min(float(request.temperature), 2.0)),
+                    top_p=max(0.1, min(float(request.top_p), 1.0)),
+                    top_k=max(1, min(int(request.top_k), 128)),
+                    thinking=request.thinking,
+                    tts_enabled=request.tts_enabled,
+                    tools=prepared["tools"],
+                    override_messages=runtime_messages,
+                ):
+                    if event.get("event") == "token":
+                        preview_text = summarize_prompt_text(
+                            preview_text + event["text"],
+                            limit=500,
+                        )
+                        request_queue.update_progress(
+                            request_id,
+                            status="running",
+                            message="Streaming tokens.",
+                            response_preview=preview_text,
+                        )
+                        yield encode_sse_payload(
+                            {
+                                "request_id": request_id,
+                                "id": completion_id,
+                                "object": "chat.completion.chunk",
+                                "created": created_at,
+                                "model": model_id,
+                                "choices": [
+                                    {
+                                        "index": 0,
+                                        "delta": {"content": event["text"]},
+                                        "finish_reason": None,
+                                    }
+                                ],
+                            }
+                        )
+                        continue
+
+                    if event.get("event") != "done":
+                        continue
+
+                    final_payload = build_chat_completion_response(
+                        request=request,
+                        prepared=prepared,
+                        response_payload=event["payload"],
+                        request_id=request_id,
+                        completion_id=completion_id,
+                        created_at=created_at,
+                    )
+                    request_queue.finish(
+                        request_id,
+                        response_payload=final_payload,
+                        response_preview=summarize_prompt_text(
+                            final_payload["choices"][0]["message"].get("content", ""),
+                            limit=500,
+                        ),
+                    )
+                    final_choice = {
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": final_payload["choices"][0]["finish_reason"],
+                    }
+                    tool_calls = final_payload["choices"][0]["message"].get("tool_calls")
+                    if tool_calls:
+                        final_choice["delta"]["tool_calls"] = tool_calls
+                    yield encode_sse_payload(
+                        {
+                            "request_id": request_id,
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created_at,
+                            "model": model_id,
+                            "choices": [final_choice],
+                            "usage": final_payload.get("usage"),
+                            "structured_output": final_payload.get("structured_output"),
+                            "structured_output_error": final_payload.get(
+                                "structured_output_error"
+                            ),
+                            "gemma_lab": final_payload.get("gemma_lab"),
+                        }
+                    )
+                    break
+            except HTTPException as exc:
+                request_queue.finish(request_id, error_text=str(exc.detail))
+                yield encode_sse_payload(
+                    {
+                        "request_id": request_id,
+                        "error": {
+                            "message": str(exc.detail),
+                            "type": "HTTPException",
+                            "code": exc.status_code,
+                        }
+                    }
+                )
+            except Exception as exc:  # pragma: no cover - runtime safety
+                logger.exception(
+                    "External chat completion stream failed key=%s quantization=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                )
+                request_queue.finish(
+                    request_id,
+                    error_text=render_model_load_error(spec, exc),
+                )
+                yield encode_sse_payload(
+                    {
+                        "request_id": request_id,
+                        "error": {
+                            "message": render_model_load_error(spec, exc),
+                            "type": exc.__class__.__name__,
+                            "code": 500,
+                        }
+                    }
+                )
+            yield encode_sse_payload("[DONE]")
+
+        return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    try:
+        request_queue.wait_for_turn(
+            request_id,
+            message="Generating response.",
+        )
+        response_payload = service.generate(
+            model_key=spec["key"],
+            quantization_key=quantization_spec["key"],
+            prompt=prepared["prompt"],
+            system_prompt=prepared["system_prompt"],
+            history=prepared["history"],
+            image=prepared["image"],
+            audio=prepared["audio"],
+            max_new_tokens=max(32, min(int(request.max_tokens), 1024)),
+            temperature=max(0.0, min(float(request.temperature), 2.0)),
+            top_p=max(0.1, min(float(request.top_p), 1.0)),
+            top_k=max(1, min(int(request.top_k), 128)),
+            thinking=request.thinking,
+            tools=prepared["tools"],
+            override_messages=runtime_messages,
+        )
+        if request.tts_enabled and response_payload.get("reply"):
+            try:
+                response_payload["tts_audio"] = tts_service.synthesize(response_payload["reply"])
+            except Exception:
+                logger.exception(
+                    "TTS synthesis failed for external chat completion key=%s quantization=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                )
+                response_payload["tts_audio"] = None
+                response_payload["tts_audio_error"] = "Local TTS synthesis failed."
+
+        final_payload = build_chat_completion_response(
+            request=request,
+            prepared=prepared,
+            response_payload=response_payload,
+            request_id=request_id,
+        )
+        request_queue.finish(
+            request_id,
+            response_payload=final_payload,
+            response_preview=summarize_prompt_text(
+                final_payload["choices"][0]["message"].get("content", ""),
+                limit=500,
+            ),
+        )
+        return final_payload
+    except HTTPException as exc:
+        request_queue.finish(request_id, error_text=str(exc.detail))
+        raise
+    except Exception as exc:
+        request_queue.finish(request_id, error_text=render_model_load_error(spec, exc))
+        raise
+
+
+@app.post("/api/v1/requests/chat/completions", status_code=202)
+def api_v1_enqueue_chat_completion(request: ApiChatCompletionRequest) -> dict:
+    if request.stream:
+        raise HTTPException(
+            status_code=400,
+            detail="The async queue endpoint only supports non-stream chat completions.",
+        )
+
+    prepared = prepare_api_chat_completion_request(request)
+    spec = prepared["spec"]
+    quantization_spec = prepared["quantization_spec"]
+    request_id = request_queue.register_request(
+        route="/api/v1/requests/chat/completions",
+        runtime_family=quantization_spec.get("runtime_family"),
+        model_key=spec["key"],
+        quantization_key=quantization_spec["key"],
+        stream=False,
+        request_payload=build_request_payload_summary(
+            route="/api/v1/requests/chat/completions",
+            model_key=spec["key"],
+            quantization_key=quantization_spec["key"],
+            runtime_family=quantization_spec.get("runtime_family"),
+            prompt=prepared["prompt"],
+            system_prompt=prepared["system_prompt"],
+            history_turns=len(prepared["history"]),
+            max_new_tokens=max(32, min(int(request.max_tokens), 1024)),
+            temperature=max(0.0, min(float(request.temperature), 2.0)),
+            top_p=max(0.1, min(float(request.top_p), 1.0)),
+            top_k=max(1, min(int(request.top_k), 128)),
+            thinking=request.thinking,
+            has_image=prepared["image"] is not None,
+            has_audio=prepared["audio"] is not None,
+            stream=False,
+            extra={
+                "tool_count": len(prepared["tools"]),
+                "response_format": request.response_format.type
+                if request.response_format
+                else "text",
+            },
+        ),
+        request_id=request.request_id,
+    )
+
+    runtime_messages = (
+        prepared["runtime_messages"]
+        if quantization_spec.get("runtime_family") == "transformers"
+        else None
+    )
+
+    def run_background_chat_completion() -> None:
+        try:
+            request_queue.wait_for_turn(
+                request_id,
+                message="Generating async response.",
+            )
+            response_payload = service.generate(
+                model_key=spec["key"],
+                quantization_key=quantization_spec["key"],
+                prompt=prepared["prompt"],
+                system_prompt=prepared["system_prompt"],
+                history=prepared["history"],
+                image=prepared["image"],
+                audio=prepared["audio"],
+                max_new_tokens=max(32, min(int(request.max_tokens), 1024)),
+                temperature=max(0.0, min(float(request.temperature), 2.0)),
+                top_p=max(0.1, min(float(request.top_p), 1.0)),
+                top_k=max(1, min(int(request.top_k), 128)),
+                thinking=request.thinking,
+                tools=prepared["tools"],
+                override_messages=runtime_messages,
+            )
+            final_payload = build_chat_completion_response(
+                request=request,
+                prepared=prepared,
+                response_payload=response_payload,
+                request_id=request_id,
+            )
+            request_queue.finish(
+                request_id,
+                response_payload=final_payload,
+                response_preview=summarize_prompt_text(
+                    final_payload["choices"][0]["message"].get("content", ""),
+                    limit=500,
+                ),
+            )
+        except HTTPException as exc:
+            request_queue.finish(request_id, error_text=str(exc.detail))
+        except Exception as exc:  # pragma: no cover - runtime safety
+            logger.exception(
+                "Async chat completion failed request_id=%s key=%s quantization=%s",
+                request_id,
+                spec["key"],
+                quantization_spec["key"],
+            )
+            request_queue.finish(request_id, error_text=render_model_load_error(spec, exc))
+
+    worker = threading.Thread(
+        target=run_background_chat_completion,
+        daemon=True,
+        name=f"gemma-api-request-{request_id[:8]}",
+    )
+    worker.start()
+
+    return {
+        "accepted": True,
+        "request_id": request_id,
+        "status_url": f"/api/v1/requests/{request_id}",
+        "queue": request_queue.snapshot(),
+    }
 
 
 @app.get("/api/health")
@@ -3119,8 +5066,34 @@ async def api_generate(
             audio=audio,
         )
     )
+    request_id = request_queue.register_request(
+        route="/api/generate",
+        runtime_family=quantization_spec.get("runtime_family"),
+        model_key=spec["key"],
+        quantization_key=quantization_spec["key"],
+        stream=False,
+        request_payload=build_request_payload_summary(
+            route="/api/generate",
+            model_key=spec["key"],
+            quantization_key=quantization_spec["key"],
+            runtime_family=quantization_spec.get("runtime_family"),
+            prompt=normalized_prompt,
+            system_prompt=normalized_system_prompt,
+            history_turns=len(history),
+            max_new_tokens=max(32, min(max_new_tokens, 1024)),
+            temperature=max(0.0, min(temperature, 2.0)),
+            top_p=max(0.1, min(top_p, 1.0)),
+            top_k=max(1, min(top_k, 128)),
+            thinking=thinking,
+            has_image=image_payload is not None,
+            has_audio=audio_payload is not None,
+            stream=False,
+            extra={"tts_enabled": tts_enabled},
+        ),
+    )
     logger.info(
-        "Generate execution key=%s quantization=%s thinking=%s tts=%s prompt_chars=%s system_prompt_chars=%s history_turns=%s max_new_tokens=%s image=%s audio=%s",
+        "Generate execution request_id=%s key=%s quantization=%s thinking=%s tts=%s prompt_chars=%s system_prompt_chars=%s history_turns=%s max_new_tokens=%s image=%s audio=%s",
+        request_id,
         spec["key"],
         quantization_spec["key"],
         thinking,
@@ -3133,34 +5106,49 @@ async def api_generate(
         audio_payload is not None,
     )
 
-    response_payload = service.generate(
-        model_key=spec["key"],
-        quantization_key=quantization_spec["key"],
-        prompt=normalized_prompt,
-        system_prompt=normalized_system_prompt,
-        history=history,
-        image=image_payload,
-        audio=audio_payload,
-        max_new_tokens=max(32, min(max_new_tokens, 1024)),
-        temperature=max(0.0, min(temperature, 2.0)),
-        top_p=max(0.1, min(top_p, 1.0)),
-        top_k=max(1, min(top_k, 128)),
-        thinking=thinking,
-    )
+    try:
+        request_queue.wait_for_turn(request_id, message="Generating response.")
+        response_payload = service.generate(
+            model_key=spec["key"],
+            quantization_key=quantization_spec["key"],
+            prompt=normalized_prompt,
+            system_prompt=normalized_system_prompt,
+            history=history,
+            image=image_payload,
+            audio=audio_payload,
+            max_new_tokens=max(32, min(max_new_tokens, 1024)),
+            temperature=max(0.0, min(temperature, 2.0)),
+            top_p=max(0.1, min(top_p, 1.0)),
+            top_k=max(1, min(top_k, 128)),
+            thinking=thinking,
+        )
 
-    if tts_enabled and response_payload.get("reply"):
-        try:
-            response_payload["tts_audio"] = tts_service.synthesize(response_payload["reply"])
-        except Exception:
-            logger.exception(
-                "TTS synthesis failed key=%s quantization=%s",
-                spec["key"],
-                quantization_spec["key"],
-            )
-            response_payload["tts_audio"] = None
-            response_payload["tts_audio_error"] = "Local TTS synthesis failed."
+        if tts_enabled and response_payload.get("reply"):
+            try:
+                response_payload["tts_audio"] = tts_service.synthesize(response_payload["reply"])
+            except Exception:
+                logger.exception(
+                    "TTS synthesis failed key=%s quantization=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                )
+                response_payload["tts_audio"] = None
+                response_payload["tts_audio_error"] = "Local TTS synthesis failed."
 
-    return response_payload
+        response_payload["request_id"] = request_id
+        response_payload["status_url"] = f"/api/v1/requests/{request_id}"
+        request_queue.finish(
+            request_id,
+            response_payload=response_payload,
+            response_preview=summarize_prompt_text(response_payload.get("reply", ""), limit=500),
+        )
+        return response_payload
+    except HTTPException as exc:
+        request_queue.finish(request_id, error_text=str(exc.detail))
+        raise
+    except Exception as exc:
+        request_queue.finish(request_id, error_text=render_model_load_error(spec, exc))
+        raise
 
 
 @app.post("/api/generate-stream")
@@ -3190,8 +5178,34 @@ async def api_generate_stream(
             audio=audio,
         )
     )
+    request_id = request_queue.register_request(
+        route="/api/generate-stream",
+        runtime_family=quantization_spec.get("runtime_family"),
+        model_key=spec["key"],
+        quantization_key=quantization_spec["key"],
+        stream=True,
+        request_payload=build_request_payload_summary(
+            route="/api/generate-stream",
+            model_key=spec["key"],
+            quantization_key=quantization_spec["key"],
+            runtime_family=quantization_spec.get("runtime_family"),
+            prompt=normalized_prompt,
+            system_prompt=normalized_system_prompt,
+            history_turns=len(history),
+            max_new_tokens=max(32, min(max_new_tokens, 1024)),
+            temperature=max(0.0, min(temperature, 2.0)),
+            top_p=max(0.1, min(top_p, 1.0)),
+            top_k=max(1, min(top_k, 128)),
+            thinking=thinking,
+            has_image=image_payload is not None,
+            has_audio=audio_payload is not None,
+            stream=True,
+            extra={"tts_enabled": tts_enabled},
+        ),
+    )
     logger.info(
-        "Generate stream execution key=%s quantization=%s thinking=%s tts=%s prompt_chars=%s system_prompt_chars=%s history_turns=%s max_new_tokens=%s image=%s audio=%s",
+        "Generate stream execution request_id=%s key=%s quantization=%s thinking=%s tts=%s prompt_chars=%s system_prompt_chars=%s history_turns=%s max_new_tokens=%s image=%s audio=%s",
+        request_id,
         spec["key"],
         quantization_spec["key"],
         thinking,
@@ -3205,7 +5219,12 @@ async def api_generate_stream(
     )
 
     def event_stream():
+        preview_text = ""
         try:
+            request_queue.wait_for_turn(
+                request_id,
+                message="Generating streamed response.",
+            )
             for event in service.stream_generate(
                 model_key=spec["key"],
                 quantization_key=quantization_spec["key"],
@@ -3221,11 +5240,37 @@ async def api_generate_stream(
                 thinking=thinking,
                 tts_enabled=tts_enabled,
             ):
+                if event.get("event") == "start":
+                    event["request_id"] = request_id
+                    event["status_url"] = f"/api/v1/requests/{request_id}"
+                elif event.get("event") == "token":
+                    preview_text = summarize_prompt_text(
+                        preview_text + event.get("text", ""),
+                        limit=500,
+                    )
+                    request_queue.update_progress(
+                        request_id,
+                        status="running",
+                        message="Streaming tokens.",
+                        response_preview=preview_text,
+                    )
+                elif event.get("event") == "done":
+                    event["payload"]["request_id"] = request_id
+                    event["payload"]["status_url"] = f"/api/v1/requests/{request_id}"
+                    request_queue.finish(
+                        request_id,
+                        response_payload=event["payload"],
+                        response_preview=summarize_prompt_text(
+                            event["payload"].get("reply", ""),
+                            limit=500,
+                        ),
+                    )
                 yield (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
         except HTTPException as exc:
+            request_queue.finish(request_id, error_text=str(exc.detail))
             yield (
                 json.dumps(
-                    {"event": "error", "detail": str(exc.detail)},
+                    {"event": "error", "request_id": request_id, "detail": str(exc.detail)},
                     ensure_ascii=False,
                 )
                 + "\n"
@@ -3236,9 +5281,17 @@ async def api_generate_stream(
                 spec["key"],
                 quantization_spec["key"],
             )
+            request_queue.finish(
+                request_id,
+                error_text=str(render_model_load_error(spec, exc)),
+            )
             yield (
                 json.dumps(
-                    {"event": "error", "detail": str(render_model_load_error(spec, exc))},
+                    {
+                        "event": "error",
+                        "request_id": request_id,
+                        "detail": str(render_model_load_error(spec, exc)),
+                    },
                     ensure_ascii=False,
                 )
                 + "\n"
