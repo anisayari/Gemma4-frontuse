@@ -6,8 +6,12 @@ import './App.css'
 
 const DEFAULT_MODEL_KEY = 'e4b'
 const DEFAULT_QUANTIZATION_KEY = 'bf16'
+const DEFAULT_MAX_NEW_TOKENS = 512
 const DEFAULT_SYSTEM_PROMPT =
   'You are Gemma 4 running locally on a workstation. Be concise, technical, and explicit about what can be inferred from the provided media.'
+const CONTINUATION_PROMPT =
+  'Continue exactly where your previous answer stopped. Do not restart, summarize, apologize, or repeat any text you already produced. Output only the missing continuation.'
+const AUTO_CONTINUE_LIMIT = 3
 
 const PROMPT_PRESETS = [
   {
@@ -630,6 +634,10 @@ function getAssistantChips(message) {
     chips.push(`${message.meta.generated_tokens} new tokens`)
   }
 
+  if (message.meta.hit_max_tokens) {
+    chips.push('Hit token limit')
+  }
+
   if (message.meta.tts_audio?.voice) {
     chips.push(`Voice: ${message.meta.tts_audio.voice}`)
   }
@@ -639,6 +647,29 @@ function getAssistantChips(message) {
   }
 
   return chips
+}
+
+function serializeHistoryMessages(messageList) {
+  return messageList.slice(-8).map((message) => ({
+    role: message.role,
+    content: message.content,
+  }))
+}
+
+function shouldContinuePayload(payload) {
+  return payload?.finish_reason === 'length' || payload?.hit_max_tokens === true
+}
+
+function mergeThought(existingThought, nextThought) {
+  if (!existingThought) {
+    return nextThought || undefined
+  }
+
+  if (!nextThought || existingThought.includes(nextThought)) {
+    return existingThought
+  }
+
+  return `${existingThought}\n\n${nextThought}`
 }
 
 function getDefaultLoadState() {
@@ -746,11 +777,12 @@ function App() {
   const [autoSpeak, setAutoSpeak] = useState(true)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [settings, setSettings] = useState({
-    maxNewTokens: 256,
+    maxNewTokens: DEFAULT_MAX_NEW_TOKENS,
     temperature: 1,
     topP: 0.95,
     topK: 64,
     thinking: false,
+    continuationMode: 'manual',
   })
 
   const activeThread =
@@ -1333,10 +1365,7 @@ function App() {
       )
     })
 
-    const historyPayload = messages.slice(-8).map((message) => ({
-      role: message.role,
-      content: message.content,
-    }))
+    const historyPayload = serializeHistoryMessages(messages)
 
     const formData = new FormData()
     formData.set('model_key', selectedModelKey)
@@ -1415,7 +1444,7 @@ function App() {
         setLiveError(finalPayload.tts_audio_error)
       }
 
-      const assistantMessage = {
+      let assistantMessage = {
         id: pendingAssistantId,
         role: 'assistant',
         content: finalPayload.reply || streamedText,
@@ -1436,6 +1465,22 @@ function App() {
           setAudioFile(null)
         }
       })
+
+      if (mode === 'text' && settings.continuationMode === 'auto' && shouldContinuePayload(finalPayload)) {
+        const autoContinuedMessage = await continueAssistantMessage({
+          threadId,
+          assistantMessageId: pendingAssistantId,
+          baseMessage: assistantMessage,
+          historyMessages: [...messages, pendingUserMessage, assistantMessage],
+          depth: 1,
+          auto: true,
+          manageBusyState: false,
+        })
+
+        if (autoContinuedMessage) {
+          assistantMessage = autoContinuedMessage
+        }
+      }
 
       if (mode === 'live') {
         if (autoSpeak && finalPayload.tts_audio?.url) {
@@ -1489,6 +1534,204 @@ function App() {
     } finally {
       setBusy(false)
     }
+  }
+
+  async function continueAssistantMessage({
+    threadId,
+    assistantMessageId,
+    baseMessage = null,
+    historyMessages = null,
+    depth = 1,
+    auto = false,
+    manageBusyState = true,
+  }) {
+    const targetThread =
+      threads.find((thread) => thread.id === threadId) ??
+      (activeThread?.id === threadId ? activeThread : null)
+    const sourceMessages = historyMessages ?? targetThread?.messages ?? []
+    const existingMessage =
+      baseMessage ??
+      sourceMessages.find(
+        (message) => message.id === assistantMessageId && message.role === 'assistant',
+      ) ??
+      null
+
+    if (!existingMessage) {
+      return null
+    }
+
+    const targetModelKey = existingMessage.meta?.active_model_key || selectedModelKey
+    const targetQuantizationKey =
+      existingMessage.meta?.active_quantization_key || selectedQuantizationKey
+
+    if (isModelLoading || normalizedLoadState.is_loading) {
+      setError('A model is still loading. Wait for it to finish before continuing.')
+      return null
+    }
+
+    if (!health?.loaded) {
+      setError('Nothing is loaded right now. Load the same model again before continuing.')
+      return null
+    }
+
+    if (
+      health.active_model_key !== targetModelKey ||
+      health.active_quantization_key !== targetQuantizationKey
+    ) {
+      setError(
+        `Continue needs ${existingMessage.meta?.active_model?.label || 'the original model'} in ${
+          existingMessage.meta?.active_quantization?.label || 'its original quantization'
+        }. Load it again first.`,
+      )
+      return null
+    }
+
+    if (manageBusyState) {
+      setIsSending(true)
+      setError('')
+    }
+
+    startTransition(() => {
+      setThreads((current) =>
+        updateMessageInThread(current, threadId, assistantMessageId, (message) => ({
+          ...message,
+          streamingState: 'waiting',
+        })),
+      )
+    })
+
+    const formData = new FormData()
+    formData.set('model_key', targetModelKey)
+    formData.set('quantization_key', targetQuantizationKey)
+    formData.set('prompt', CONTINUATION_PROMPT)
+    formData.set('system_prompt', systemPrompt)
+    formData.set('history_json', JSON.stringify(serializeHistoryMessages(sourceMessages)))
+    formData.set('max_new_tokens', String(settings.maxNewTokens))
+    formData.set('temperature', String(settings.temperature))
+    formData.set('top_p', String(settings.topP))
+    formData.set('top_k', String(settings.topK))
+    formData.set('thinking', String(settings.thinking))
+    formData.set('tts_enabled', 'false')
+
+    let streamedText = ''
+    let finalPayload = null
+    let streamError = ''
+    const baseContent = existingMessage.content || ''
+
+    try {
+      const response = await fetch('/api/generate-stream', {
+        method: 'POST',
+        body: formData,
+      })
+
+      if (!response.ok) {
+        const data = await parseApiPayload(response)
+        throw new Error(data.detail || 'Continuation failed.')
+      }
+
+      await readNdjsonStream(response, (event) => {
+        if (event.event === 'token') {
+          streamedText += event.text || ''
+          startTransition(() => {
+            setThreads((current) =>
+              updateMessageInThread(current, threadId, assistantMessageId, (message) => ({
+                ...message,
+                content: `${baseContent}${streamedText}`,
+                streamingState: 'streaming',
+              })),
+            )
+          })
+          return
+        }
+
+        if (event.event === 'done') {
+          finalPayload = event.payload
+          return
+        }
+
+        if (event.event === 'error') {
+          streamError = event.detail || 'Continuation failed.'
+        }
+      })
+
+      if (streamError) {
+        throw new Error(streamError)
+      }
+
+      if (!finalPayload) {
+        throw new Error('Continuation ended before the final payload arrived.')
+      }
+
+      const nextAssistantMessage = {
+        ...existingMessage,
+        content: `${baseContent}${finalPayload.reply || streamedText}`,
+        thought: mergeThought(existingMessage.thought, finalPayload.thought),
+        meta: {
+          ...(existingMessage.meta || {}),
+          ...finalPayload,
+          tts_audio: null,
+          continuation_count: Number(existingMessage.meta?.continuation_count || 0) + 1,
+        },
+        streamingState: 'done',
+      }
+
+      startTransition(() => {
+        setThreads((current) =>
+          updateMessageInThread(current, threadId, assistantMessageId, () => nextAssistantMessage),
+        )
+      })
+
+      if (auto && shouldContinuePayload(finalPayload) && depth < AUTO_CONTINUE_LIMIT) {
+        return continueAssistantMessage({
+          threadId,
+          assistantMessageId,
+          baseMessage: nextAssistantMessage,
+          historyMessages: sourceMessages.map((message) =>
+            message.id === assistantMessageId ? nextAssistantMessage : message,
+          ),
+          depth: depth + 1,
+          auto: true,
+          manageBusyState: false,
+        })
+      }
+
+      if (auto && shouldContinuePayload(finalPayload) && depth >= AUTO_CONTINUE_LIMIT) {
+        setError(
+          `Auto-continue stopped after ${AUTO_CONTINUE_LIMIT} passes. Click Continue to keep going if needed.`,
+        )
+      }
+
+      await refreshModelsAndHealth()
+      return nextAssistantMessage
+    } catch (continuationError) {
+      setError(continuationError.message)
+      startTransition(() => {
+        setThreads((current) =>
+          updateMessageInThread(current, threadId, assistantMessageId, (message) => ({
+            ...message,
+            streamingState: 'done',
+          })),
+        )
+      })
+      return null
+    } finally {
+      if (manageBusyState) {
+        setIsSending(false)
+      }
+    }
+  }
+
+  async function handleContinueTurn(messageId) {
+    if (!activeThread) {
+      return
+    }
+
+    await continueAssistantMessage({
+      threadId: activeThread.id,
+      assistantMessageId: messageId,
+      auto: false,
+      manageBusyState: true,
+    })
   }
 
   async function teardownLiveRecorder() {
@@ -2419,6 +2662,22 @@ function App() {
                             ))}
                           </div>
                         ) : null}
+
+                        {message.role === 'assistant' &&
+                        settings.continuationMode !== 'off' &&
+                        shouldContinuePayload(message.meta) ? (
+                          <div className="message-action-row">
+                            <button
+                              className="message-action-button"
+                              type="button"
+                              onClick={() => void handleContinueTurn(message.id)}
+                              disabled={isSending || isModelLoading}
+                            >
+                              <span className="material-symbols-outlined">resume</span>
+                              <span>Continue</span>
+                            </button>
+                          </div>
+                        ) : null}
                       </div>
                     </article>
                   ))}
@@ -2877,7 +3136,7 @@ function App() {
                       setSettings((current) => {
                         const fallbackValue = isWslVllmRuntime
                           ? NVFP4_MAX_NEW_TOKENS
-                          : 256
+                          : DEFAULT_MAX_NEW_TOKENS
                         const parsedValue = Number(
                           event.target.value || fallbackValue,
                         )
@@ -2900,6 +3159,23 @@ function App() {
                     older turns are compressed automatically.
                   </p>
                 ) : null}
+
+                <label className="field">
+                  <span>Continuation</span>
+                  <select
+                    value={settings.continuationMode}
+                    onChange={(event) =>
+                      setSettings((current) => ({
+                        ...current,
+                        continuationMode: event.target.value,
+                      }))
+                    }
+                  >
+                    <option value="off">Off</option>
+                    <option value="manual">Continue button</option>
+                    <option value="auto">Auto-continue</option>
+                  </select>
+                </label>
 
                 <label className="field">
                   <span>Temperature</span>

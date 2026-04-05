@@ -100,6 +100,7 @@ WSL_VLLM_LOG_STALL_TIMEOUT_SECONDS = int(
 LOCAL_FILES_ONLY = os.getenv("GEMMA4_LOCAL_ONLY", "0") == "1"
 DEFAULT_MODEL_KEY = os.getenv("GEMMA4_MODEL_KEY", "e4b")
 DEFAULT_QUANTIZATION_KEY = os.getenv("GEMMA4_QUANTIZATION_KEY", "bf16")
+DEFAULT_MAX_NEW_TOKENS = int(os.getenv("GEMMA4_MAX_NEW_TOKENS", "512"))
 DEFAULT_TTS_VOICE = os.getenv("GEMMA4_TTS_VOICE", "fr_FR-siwis-medium")
 DEFAULT_SYSTEM_PROMPT = (
     "You are Gemma 4 running locally on a workstation. Be concise, technical, and "
@@ -542,6 +543,32 @@ def render_vllm_request_error(spec: dict, detail: str) -> str:
             "still overflowed the context window. Shorten the prompt or clear older turns."
         )
     return detail
+
+
+def infer_transformers_finish_reason(
+    processor: object, outputs: object, input_len: int, requested_max_new_tokens: int
+) -> tuple[str, bool]:
+    generated_ids = outputs[0][input_len:].tolist()
+    generated_tokens = len(generated_ids)
+
+    eos_token_ids: set[int] = set()
+    tokenizer = getattr(processor, "tokenizer", None)
+    if tokenizer is not None:
+        eos_token_id = getattr(tokenizer, "eos_token_id", None)
+        if isinstance(eos_token_id, int):
+            eos_token_ids.add(eos_token_id)
+        elif isinstance(eos_token_id, (list, tuple, set)):
+            eos_token_ids.update(
+                token_id for token_id in eos_token_id if isinstance(token_id, int)
+            )
+
+    if generated_ids and eos_token_ids and generated_ids[-1] in eos_token_ids:
+        return "stop", False
+
+    if generated_tokens >= max(1, int(requested_max_new_tokens)):
+        return "length", True
+
+    return "stop", False
 
 
 def to_wsl_path(path: Path) -> str:
@@ -1023,6 +1050,7 @@ class LlamaCppServerRuntime:
         usage = response_payload.get("usage") or {}
         timings = response_payload.get("timings") or {}
         reply = sanitize_llama_reply(message.get("content", ""))
+        finish_reason = choice.get("finish_reason") or "stop"
         return {
             "reply": reply,
             "thought": message.get("reasoning_content"),
@@ -1039,6 +1067,9 @@ class LlamaCppServerRuntime:
             "vram_allocated_gib": 0.0,
             "vram_reserved_gib": 0.0,
             "timings": timings,
+            "finish_reason": finish_reason,
+            "hit_max_tokens": finish_reason == "length",
+            "max_new_tokens_requested": max_new_tokens,
         }
 
     def stream_generate(
@@ -1076,6 +1107,7 @@ class LlamaCppServerRuntime:
         thought_chunks: list[str] = []
         started = time.perf_counter()
         emitted_reply = ""
+        finish_reason = "stop"
 
         try:
             with urllib.request.urlopen(request, timeout=300) as response:
@@ -1091,6 +1123,7 @@ class LlamaCppServerRuntime:
 
                     event_payload = json.loads(payload_line)
                     choice = (event_payload.get("choices") or [{}])[0]
+                    finish_reason = choice.get("finish_reason") or finish_reason
                     delta = choice.get("delta") or {}
                     if delta.get("content"):
                         text = delta["content"]
@@ -1129,6 +1162,9 @@ class LlamaCppServerRuntime:
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
             "vram_allocated_gib": 0.0,
             "vram_reserved_gib": 0.0,
+            "finish_reason": finish_reason,
+            "hit_max_tokens": finish_reason == "length",
+            "max_new_tokens_requested": max_new_tokens,
         }
         if tts_enabled and reply:
             try:
@@ -1553,6 +1589,7 @@ class WslVllmServerRuntime:
         choice = (response_payload.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         usage = response_payload.get("usage") or {}
+        finish_reason = choice.get("finish_reason") or "stop"
         return {
             "reply": message.get("content", ""),
             "thought": message.get("reasoning_content"),
@@ -1568,6 +1605,9 @@ class WslVllmServerRuntime:
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
             "vram_allocated_gib": 0.0,
             "vram_reserved_gib": 0.0,
+            "finish_reason": finish_reason,
+            "hit_max_tokens": finish_reason == "length",
+            "max_new_tokens_requested": max_new_tokens,
         }
 
     def stream_generate(
@@ -1604,6 +1644,7 @@ class WslVllmServerRuntime:
         reply_chunks: list[str] = []
         thought_chunks: list[str] = []
         started = time.perf_counter()
+        finish_reason = "stop"
 
         try:
             with urllib.request.urlopen(
@@ -1621,6 +1662,7 @@ class WslVllmServerRuntime:
 
                     event_payload = json.loads(payload_line)
                     choice = (event_payload.get("choices") or [{}])[0]
+                    finish_reason = choice.get("finish_reason") or finish_reason
                     delta = choice.get("delta") or {}
                     if delta.get("content"):
                         text = delta["content"]
@@ -1675,6 +1717,9 @@ class WslVllmServerRuntime:
             "gpu": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "CPU",
             "vram_allocated_gib": 0.0,
             "vram_reserved_gib": 0.0,
+            "finish_reason": finish_reason,
+            "hit_max_tokens": finish_reason == "length",
+            "max_new_tokens_requested": max_new_tokens,
         }
         if tts_enabled and reply:
             try:
@@ -1933,11 +1978,15 @@ class GemmaService:
         spec: dict,
         quantization_spec: dict,
         elapsed_ms: float,
+        requested_max_new_tokens: int,
     ) -> dict:
         generated_tokens = int(outputs[0].shape[-1] - input_len)
         raw_response = processor.decode(outputs[0][input_len:], skip_special_tokens=False)
         parsed = processor.parse_response(raw_response)
         parsed_reply = extract_reply(parsed)
+        finish_reason, hit_max_tokens = infer_transformers_finish_reason(
+            processor, outputs, input_len, requested_max_new_tokens
+        )
         return {
             "reply": parsed_reply["reply"],
             "thought": parsed_reply["thought"],
@@ -1957,6 +2006,9 @@ class GemmaService:
             "vram_reserved_gib": round(torch.cuda.memory_reserved() / (1024**3), 2)
             if torch.cuda.is_available()
             else 0.0,
+            "finish_reason": finish_reason,
+            "hit_max_tokens": hit_max_tokens,
+            "max_new_tokens_requested": requested_max_new_tokens,
         }
 
     def ensure_loaded(
@@ -2486,6 +2538,7 @@ class GemmaService:
             spec=spec,
             quantization_spec=quantization_spec,
             elapsed_ms=elapsed_ms,
+            requested_max_new_tokens=max_new_tokens,
         )
 
     def stream_generate(
@@ -2636,6 +2689,7 @@ class GemmaService:
             spec=spec,
             quantization_spec=quantization_spec,
             elapsed_ms=round((time.perf_counter() - start_time) * 1000, 1),
+            requested_max_new_tokens=max_new_tokens,
         )
 
         if tts_enabled and response_payload.get("reply"):
@@ -2905,7 +2959,7 @@ async def api_generate(
     prompt: str = Form(""),
     system_prompt: str = Form(DEFAULT_SYSTEM_PROMPT),
     history_json: str = Form("[]"),
-    max_new_tokens: int = Form(256),
+    max_new_tokens: int = Form(DEFAULT_MAX_NEW_TOKENS),
     temperature: float = Form(1.0),
     top_p: float = Form(0.95),
     top_k: int = Form(64),
@@ -2970,7 +3024,7 @@ async def api_generate_stream(
     prompt: str = Form(""),
     system_prompt: str = Form(DEFAULT_SYSTEM_PROMPT),
     history_json: str = Form("[]"),
-    max_new_tokens: int = Form(256),
+    max_new_tokens: int = Form(DEFAULT_MAX_NEW_TOKENS),
     temperature: float = Form(1.0),
     top_p: float = Form(0.95),
     top_k: int = Form(64),
