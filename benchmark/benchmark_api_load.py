@@ -445,7 +445,7 @@ def build_report(results, parallel_results, audio_probe, bubble_svg_path, parall
                     f"{workload['ttft_seconds']} | {workload['total_seconds']} | {workload['output_chars']} | "
                     f"{workload.get('completion_tokens') or '-'} | {workload.get('finish_reason') or '-'} |"
                 )
-        lines += ["", "## Latency graph", "", f"![API latency bubble chart]({bubble_svg_path.as_posix()})"]
+        lines += ["", "## Latency graph", "", f"![API latency bubble chart]({bubble_svg_path.name})"]
     if parallel_results:
         lines += [
             "",
@@ -462,7 +462,7 @@ def build_report(results, parallel_results, audio_probe, bubble_svg_path, parall
             )
         lines += [
             "",
-            f"![Parallel request makespan chart]({parallel_svg_path.as_posix()})",
+            f"![Parallel request makespan chart]({parallel_svg_path.name})",
             "",
             "- The current backend uses one inference queue, so practical parallel inference stays close to 1 active request at a time.",
             "- Health, monitoring, and request-status routes remain callable while the queue is busy.",

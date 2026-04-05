@@ -52,7 +52,7 @@ Generated on 2026-04-05 15:45:05.
 
 ## Latency graph
 
-![API latency bubble chart](C:/Users/Anis AYARI/Desktop/projects/gemma4-test/benchmark/results/gemma4-api-loadtest-latency-20260405-153459.svg)
+![API latency bubble chart](gemma4-api-loadtest-latency-20260405-153459.svg)
 
 ## Parallel request test
 
@@ -65,7 +65,7 @@ Generated on 2026-04-05 15:45:05.
 | Gemma 4 26B A4B / SFP8 | 2 | 1.545 | 1.166 | 1.544 | 1.18 |
 | Gemma 4 26B A4B / SFP8 | 4 | 3.055 | 1.94 | 3.055 | 1.19 |
 
-![Parallel request makespan chart](C:/Users/Anis AYARI/Desktop/projects/gemma4-test/benchmark/results/gemma4-api-loadtest-parallel-20260405-153459.svg)
+![Parallel request makespan chart](gemma4-api-loadtest-parallel-20260405-153459.svg)
 
 - The current backend uses one inference queue, so practical parallel inference stays close to 1 active request at a time.
 - Health, monitoring, and request-status routes remain callable while the queue is busy.

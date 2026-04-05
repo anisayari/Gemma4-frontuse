@@ -182,6 +182,26 @@ Latest artifacts:
 - [API load test report](./benchmark/results/gemma4-api-loadtest-latest.md)
 - [API load test JSON](./benchmark/results/gemma4-api-loadtest-latest.json)
 
+Current snapshot:
+
+| Model | Load | Short request | Medium request | Long request |
+| --- | ---: | ---: | ---: | ---: |
+| `E2B / SFP8` | `0.03s` | `0.35s` | `0.82s` | `1.22s` |
+| `E2B / Q4_0` | `29.09s` | `0.46s` | `0.84s` | `1.21s` |
+| `E4B / SFP8` | `32.19s` | `0.56s` | `1.06s` | `1.57s` |
+| `E4B / Q4_0` | `31.03s` | `0.45s` | `0.86s` | `1.30s` |
+| `26B A4B / SFP8` | `35.29s` | `0.83s` | `1.96s` | `3.15s` |
+| `26B A4B / Q4_0` | `71.70s` | `0.49s` | `0.90s` | `1.41s` |
+| `31B / Q4_0` | `54.69s` | `0.86s` | `2.48s` | `3.73s` |
+| `31B / SFP8` | `45.91s` | `8.06s` | `23.39s` | `34.42s` |
+
+Quick read:
+
+- fastest API path overall: `E2B / SFP8`
+- best big-model compromise on this API path: `26B A4B / Q4_0`
+- slowest usable path measured here: `31B / SFP8`
+- `31B IT NVFP4 / NVFP4` did not load on this workstation in the API load test
+
 ### API latency graph
 
 ![Gemma 4 API latency graph](benchmark/results/gemma4-api-loadtest-latency-latest.svg)
