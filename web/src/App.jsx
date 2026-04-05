@@ -28,6 +28,8 @@ const PROMPT_PRESETS = [
 const DEFAULT_LIVE_PROMPT =
   'Use the attached camera frame and microphone audio as the current live turn. Reply conversationally, like a concise video call copilot.'
 
+const NVFP4_MAX_NEW_TOKENS = 64
+
 function mergeAudioSamples(chunks, totalLength) {
   const merged = new Float32Array(totalLength)
   let offset = 0
@@ -172,6 +174,140 @@ async function playGeneratedAudio(audioPayload, audioRef, onStart, onEnd, onErro
     onError?.()
     return false
   }
+}
+
+function formatAudioClock(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return '0:00'
+  }
+
+  const wholeSeconds = Math.floor(seconds)
+  const minutes = Math.floor(wholeSeconds / 60)
+  const remainingSeconds = wholeSeconds % 60
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`
+}
+
+function VoicePlayer({ audioPayload }) {
+  const audioElementRef = useRef(null)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [currentTime, setCurrentTime] = useState(0)
+  const [duration, setDuration] = useState(0)
+  const [isReady, setIsReady] = useState(false)
+
+  useEffect(() => {
+    const audio = audioElementRef.current
+    if (!audio) {
+      return undefined
+    }
+
+    const handleLoadedMetadata = () => {
+      setDuration(audio.duration || 0)
+      setIsReady(true)
+    }
+    const handleTimeUpdate = () => setCurrentTime(audio.currentTime || 0)
+    const handlePlay = () => setIsPlaying(true)
+    const handlePause = () => setIsPlaying(false)
+    const handleEnded = () => {
+      setIsPlaying(false)
+      setCurrentTime(0)
+    }
+
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata)
+    audio.addEventListener('timeupdate', handleTimeUpdate)
+    audio.addEventListener('play', handlePlay)
+    audio.addEventListener('pause', handlePause)
+    audio.addEventListener('ended', handleEnded)
+
+    return () => {
+      audio.pause()
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      audio.removeEventListener('timeupdate', handleTimeUpdate)
+      audio.removeEventListener('play', handlePlay)
+      audio.removeEventListener('pause', handlePause)
+      audio.removeEventListener('ended', handleEnded)
+    }
+  }, [audioPayload?.url])
+
+  async function handleTogglePlayback() {
+    const audio = audioElementRef.current
+    if (!audio) {
+      return
+    }
+
+    if (audio.paused) {
+      try {
+        await audio.play()
+      } catch {
+        setIsPlaying(false)
+      }
+      return
+    }
+
+    audio.pause()
+  }
+
+  function handleSeek(event) {
+    const audio = audioElementRef.current
+    if (!audio) {
+      return
+    }
+
+    const nextTime = Number(event.target.value || 0)
+    audio.currentTime = nextTime
+    setCurrentTime(nextTime)
+  }
+
+  return (
+    <div className="voice-player">
+      <audio ref={audioElementRef} preload="metadata" src={audioPayload.url} />
+
+      <button className="voice-player-toggle" type="button" onClick={handleTogglePlayback}>
+        <span className="material-symbols-outlined">
+          {isPlaying ? 'pause' : 'play_arrow'}
+        </span>
+      </button>
+
+      <div className="voice-player-body">
+        <div className="voice-player-head">
+          <div className="voice-player-title">
+            <strong>Local voice</strong>
+            <span>{audioPayload.voice || 'Piper'}</span>
+          </div>
+
+          <div className="voice-player-time">
+            <span>{formatAudioClock(currentTime)}</span>
+            <span>{formatAudioClock(duration)}</span>
+          </div>
+        </div>
+
+        <input
+          className="voice-player-range"
+          type="range"
+          min="0"
+          max={duration || 0}
+          step="0.01"
+          value={Math.min(currentTime, duration || 0)}
+          onChange={handleSeek}
+          disabled={!isReady || !duration}
+          style={{
+            '--voice-progress': `${
+              duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0
+            }%`,
+          }}
+        />
+
+        <div className="voice-player-meta">
+          <span>{audioPayload.mime_type === 'audio/wav' ? 'WAV' : 'Audio'}</span>
+          <span>{audioPayload.sample_rate ? `${audioPayload.sample_rate} Hz` : 'Local clip'}</span>
+          <span>
+            {typeof audioPayload.elapsed_ms === 'number'
+              ? `${audioPayload.elapsed_ms.toFixed(0)} ms synth`
+              : 'Server-side TTS'}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 async function parseApiPayload(response) {
@@ -418,7 +554,7 @@ function getThreadSubtitle(thread) {
   const latestMessage = thread.messages[thread.messages.length - 1]
 
   if (!latestMessage) {
-    return 'Ready for local inference'
+    return 'No turns yet'
   }
 
   if (latestMessage.role === 'assistant' && latestMessage.streamingState === 'waiting') {
@@ -553,7 +689,6 @@ function App() {
   const [models, setModels] = useState([])
   const [quantizations, setQuantizations] = useState([])
   const [docsNote, setDocsNote] = useState('')
-  const [quantizationNote, setQuantizationNote] = useState('')
   const [prompt, setPrompt] = useState('')
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT)
   const [selectedModelKey, setSelectedModelKey] = useState(DEFAULT_MODEL_KEY)
@@ -570,6 +705,7 @@ function App() {
   const [isSending, setIsSending] = useState(false)
   const [isLoadingModel, setIsLoadingModel] = useState(false)
   const [isModelMenuOpen, setIsModelMenuOpen] = useState(false)
+  const [openModelInfoKey, setOpenModelInfoKey] = useState(null)
   const [isQuantizationMenuOpen, setIsQuantizationMenuOpen] = useState(false)
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [viewMode, setViewMode] = useState('text')
@@ -593,6 +729,8 @@ function App() {
   const activeThread =
     threads.find((thread) => thread.id === activeThreadId) ?? threads[0] ?? null
   const messages = activeThread?.messages ?? []
+  const latestAssistantTurn =
+    [...messages].reverse().find((message) => message.role === 'assistant') ?? null
   const latestAssistantMessage = [...messages]
     .reverse()
     .find((message) => message.role === 'assistant' && message.meta)
@@ -639,7 +777,7 @@ function App() {
   const greeting = getGreeting()
   const activeThreadSubtitle = activeThread
     ? getThreadSubtitle(activeThread)
-    : 'Ready for local inference'
+    : 'No turns yet'
   const quantizationRuntimeSupported =
     selectedQuantization?.runtime_supported ?? false
   const supportsNativeLiveAudio =
@@ -716,6 +854,21 @@ function App() {
   const loadStatusMeta = loadTargetModel?.label
     ? `${loadTargetModel.label} | ${loadTargetQuantization?.label || 'BF16'}`
     : `${selectedModel?.label || 'Gemma 4'} | ${selectedQuantization?.label || 'BF16'}`
+  const liveTranscriptStatus =
+    latestAssistantTurn?.streamingState === 'waiting'
+      ? 'Preparing'
+      : latestAssistantTurn?.streamingState === 'streaming'
+        ? 'Streaming'
+        : isSpeaking
+          ? 'Playing'
+          : 'Ready'
+  const liveTranscriptText =
+    latestAssistantTurn?.content ||
+    (latestAssistantTurn?.streamingState === 'waiting'
+      ? 'Gemma is preparing the first tokens...'
+      : latestAssistantTurn?.streamingState === 'streaming'
+        ? 'Gemma is streaming the reply...'
+        : 'The latest assistant transcript will appear here.')
   const canSendTurns =
     Boolean(selectedModelLoaded) &&
     !isModelLoading &&
@@ -790,6 +943,23 @@ function App() {
   }, [selectedModel, selectedQuantizationKey])
 
   useEffect(() => {
+    if (!isWslVllmRuntime || settings.maxNewTokens <= NVFP4_MAX_NEW_TOKENS) {
+      return
+    }
+
+    setSettings((current) => ({
+      ...current,
+      maxNewTokens: NVFP4_MAX_NEW_TOKENS,
+    }))
+  }, [isWslVllmRuntime, settings.maxNewTokens])
+
+  useEffect(() => {
+    if (!isModelMenuOpen) {
+      setOpenModelInfoKey(null)
+    }
+  }, [isModelMenuOpen])
+
+  useEffect(() => {
     let isActive = true
 
     async function bootstrap() {
@@ -824,7 +994,6 @@ function App() {
           setModels(modelsData.models)
           setDocsNote(modelsData.docs_note)
           setQuantizations(modelsData.quantizations || [])
-          setQuantizationNote(modelsData.quantization_note || '')
           setSelectedModelKey(
             healthData.active_model_key ||
               modelsData.active_model_key ||
@@ -973,7 +1142,6 @@ function App() {
       setModels(modelsData.models)
       setDocsNote(modelsData.docs_note)
       setQuantizations(modelsData.quantizations || [])
-      setQuantizationNote(modelsData.quantization_note || '')
     })
   }
 
@@ -1223,7 +1391,7 @@ function App() {
       const assistantMessage = {
         id: pendingAssistantId,
         role: 'assistant',
-        content: finalPayload.reply,
+        content: finalPayload.reply || streamedText,
         thought: finalPayload.thought,
         meta: finalPayload,
         createdAt: Date.now(),
@@ -1817,7 +1985,7 @@ function App() {
                     <div className="model-menu-head">
                       <div>
                         <p className="section-label">Variant selector</p>
-                        <h2>Official Gemma 4 lineup</h2>
+                        <h2>Gemma 4 lineup</h2>
                       </div>
                     </div>
 
@@ -1825,37 +1993,73 @@ function App() {
                       {models.map((model) => {
                         const isSelected = model.key === selectedModelKey
                         const isLoaded = activeModel?.key === model.key && health?.loaded
+                        const isInfoOpen = openModelInfoKey === model.key
 
                         return (
-                          <button
+                          <div
                             key={model.key}
                             className={`model-menu-item ${
                               isSelected ? 'is-selected' : ''
                             } ${isLoaded ? 'is-loaded' : ''}`}
-                            type="button"
-                            onClick={() => {
-                              setSelectedModelKey(model.key)
-                              setIsModelMenuOpen(false)
-                            }}
                           >
-                            <div className="model-menu-row">
-                              <strong>{model.label}</strong>
-                              <span>{isLoaded ? 'Loaded' : model.tier}</span>
-                            </div>
-                            <p>{model.doc_summary}</p>
-                            <div className="message-chip-row">
-                              <span className="message-chip">{model.architecture}</span>
-                              <span className="message-chip">{model.context_length}</span>
-                              {model.supported_modalities.map((modality) => (
-                                <span
-                                  key={`${model.key}-${modality}`}
-                                  className="message-chip is-modality"
-                                >
-                                  {modality}
+                            <div className="model-menu-item-head">
+                              <button
+                                className="model-select-button"
+                                type="button"
+                                onClick={() => {
+                                  setSelectedModelKey(model.key)
+                                  setIsModelMenuOpen(false)
+                                }}
+                              >
+                                <div className="model-menu-row">
+                                  <strong>{model.label}</strong>
+                                  <span>{isLoaded ? 'Loaded' : model.tier}</span>
+                                </div>
+                                <span className="model-menu-meta-line">
+                                  {model.parameter_summary}
                                 </span>
-                              ))}
+                              </button>
+
+                              <button
+                                className={`model-info-button ${
+                                  isInfoOpen ? 'is-open' : ''
+                                }`}
+                                type="button"
+                                aria-label={`More info about ${model.label}`}
+                                aria-expanded={isInfoOpen}
+                                onClick={(event) => {
+                                  event.stopPropagation()
+                                  setOpenModelInfoKey((current) =>
+                                    current === model.key ? null : model.key,
+                                  )
+                                }}
+                              >
+                                ?
+                              </button>
                             </div>
-                          </button>
+
+                            {isInfoOpen ? (
+                              <div className="model-info-popover">
+                                <p>{model.doc_summary}</p>
+                                <div className="message-chip-row">
+                                  <span className="message-chip">
+                                    {model.architecture}
+                                  </span>
+                                  <span className="message-chip">
+                                    {model.context_length}
+                                  </span>
+                                  {model.supported_modalities.map((modality) => (
+                                    <span
+                                      key={`${model.key}-${modality}`}
+                                      className="message-chip is-modality"
+                                    >
+                                      {modality}
+                                    </span>
+                                  ))}
+                                </div>
+                              </div>
+                            ) : null}
+                          </div>
                         )
                       })}
                     </div>
@@ -1956,6 +2160,7 @@ function App() {
                   isSending ||
                   isLiveSubmitting ||
                   isLiveRecording ||
+                  !quantizationRuntimeSupported ||
                   !selectedModelKey ||
                   !selectedQuantizationKey
                 }
@@ -1963,35 +2168,15 @@ function App() {
                 <span className="material-symbols-outlined">
                   {isModelLoading ? 'hourglass_top' : 'memory'}
                 </span>
-                <span>{isModelLoading ? 'Loading...' : 'Load model'}</span>
+                <span>
+                  {isModelLoading
+                    ? 'Loading...'
+                    : quantizationRuntimeSupported
+                      ? 'Load model'
+                      : 'Planning only'}
+                </span>
               </button>
             </div>
-
-            <button
-              className="topbar-icon"
-              type="button"
-              onClick={() => audioInputRef.current?.click()}
-              disabled={
-                !supportsAudio ||
-                !quantizationRuntimeSupported ||
-                isSending ||
-                isModelLoading ||
-                viewMode === 'live'
-              }
-              title={
-                audioAttachmentHint
-              }
-            >
-              <span className="material-symbols-outlined">mic</span>
-            </button>
-
-            <button
-              className="topbar-icon"
-              type="button"
-              onClick={() => setIsSettingsOpen(true)}
-            >
-              <span className="material-symbols-outlined">settings</span>
-            </button>
           </div>
         </header>
 
@@ -2056,136 +2241,43 @@ function App() {
               </div>
             </div>
 
-            <section className="editorial-hero">
-              <div className="hero-copy">
-                <p className="eyebrow">The Ethereal Intelligence</p>
-                <h2>
-                  {greeting}, <span className="gradient-text">Gemma 4.</span>
-                </h2>
-                <p>
-                  Prompt text, image, and audio from a single local canvas.
-                  {isLlamaCppRuntime
-                    ? ` ${selectedQuantization?.label || 'This quantization'} is currently routed through llama.cpp for fast local text chat in this app build.`
-                    : isWslVllmRuntime
-                    ? ` ${selectedModel?.label || 'This variant'} is currently routed through the experimental WSL vLLM bridge for Blackwell. Text and image are enabled here; video stays outside the current UI.`
-                    : supportsAudio
-                    ? ` ${selectedModel?.label || 'This variant'} is currently unlocked for text, image, and audio.`
-                    : ` ${selectedModel?.label || 'This variant'} is currently scoped to text and image according to the official modality tables.`}
-                </p>
-
-                <div className="prompt-pill-row">
-                  {PROMPT_PRESETS.map((preset) => (
-                    <button
-                      key={preset.title}
-                      className="prompt-pill"
-                      type="button"
-                      onClick={() => setPrompt(preset.prompt)}
-                    >
-                      <span className="material-symbols-outlined">{preset.icon}</span>
-                      <span>{preset.title}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <aside className="hero-panel">
-                <div className="hero-panel-head">
-                  <div>
-                    <p className="section-label">Selected variant</p>
-                    <h3>{selectedModel?.label || 'Gemma 4'}</h3>
-                  </div>
-                </div>
-
-                {selectedModel ? (
-                  <>
-                    <div className="message-chip-row">
-                      <span className="message-chip">{selectedModel.architecture}</span>
-                      <span className="message-chip">{selectedModel.tier}</span>
-                      <span className="message-chip">{selectedModel.context_length}</span>
-                      {selectedQuantization ? (
-                        <span className="message-chip">
-                          {selectedQuantization.label}
-                        </span>
-                      ) : null}
-                      {modalityBadges.map((modality) => (
-                        <span key={modality} className="message-chip is-modality">
-                          {modality}
-                        </span>
-                      ))}
-                    </div>
-
-                    <p className="hero-note">{selectedModel.parameter_summary}</p>
-                    <p className="hero-note">{selectedModel.doc_summary}</p>
-                    {selectedQuantization ? (
-                      <p className="hero-note">
-                        {selectedQuantization.doc_summary}
-                      </p>
-                    ) : null}
-                  </>
-                ) : null}
-
-                <div className="hero-stat-grid">
-                  <div className="hero-stat">
-                    <span>VRAM now</span>
-                    <strong>{formatMemory(health?.vram_allocated_gib)}</strong>
-                  </div>
-                  <div className="hero-stat">
-                    <span>Active model</span>
-                    <strong>{activeModel?.label || 'None loaded'}</strong>
-                  </div>
-                  <div className="hero-stat">
-                    <span>Quantization</span>
-                    <strong>{selectedQuantization?.label || 'BF16'}</strong>
-                  </div>
-                  <div className="hero-stat">
-                    <span>Google est.</span>
-                    <strong>{formatMemory(selectedMemoryEstimate)}</strong>
-                  </div>
-                </div>
-
-                <p className="hero-footnote">
-                  {isModelLoading
-                    ? normalizedLoadState.message
-                    : normalizedLoadState.error
-                      ? normalizedLoadState.error
-                      : modelSwitchPending && health?.loaded
-                        ? `VRAM currently holds ${activeModel?.label || 'another model'} in ${activeQuantization?.label || 'BF16'}. Click Load model in the top bar when you want to switch.`
-                        : !health?.loaded
-                          ? `Nothing is warm in VRAM yet. Choose a model, choose a quantization, then click Load model in the top bar.`
-                          : quantizationRuntimeSupported
-                            ? `Google estimates about ${formatMemory(selectedMemoryEstimate)} for ${selectedModel?.label || 'this model'} in ${selectedQuantization?.label || 'BF16'}. ${docsNote}`
-                            : `${quantizationNote} ${selectedQuantization?.doc_summary || ''}`}
-                </p>
-              </aside>
-            </section>
-
-            <section className="conversation-thread">
-              {messages.length === 0 ? (
-                <div className="empty-thread">
-                  <p className="empty-kicker">Ready for local inference</p>
-                  <h3>{activeThread?.title || 'New Chat'}</h3>
+            {messages.length === 0 ? (
+              <section className="editorial-hero">
+                <div className="hero-copy">
+                  <p className="eyebrow">The Ethereal Intelligence</p>
+                  <h2>
+                    {greeting}, <span className="gradient-text">Gemma 4.</span>
+                  </h2>
                   <p>
-                    Switch between the official Gemma 4 variants, keep one model
-                    warm in VRAM, and send multimodal prompts without leaving the
-                    canvas.
+                    Prompt text, image, and audio from a single local canvas.
+                    {isLlamaCppRuntime
+                      ? ` ${selectedQuantization?.label || 'This quantization'} is currently routed through llama.cpp for fast local text chat in this app build.`
+                      : isWslVllmRuntime
+                      ? ` ${selectedModel?.label || 'This variant'} is currently routed through the experimental WSL vLLM bridge for Blackwell. Text and image are enabled here; video stays outside the current UI.`
+                      : supportsAudio
+                      ? ` ${selectedModel?.label || 'This variant'} is currently unlocked for text, image, and audio.`
+                      : ` ${selectedModel?.label || 'This variant'} is currently scoped to text and image according to the official modality tables.`}
                   </p>
 
-                  <div className="empty-grid">
+                  <div className="prompt-pill-row">
                     {PROMPT_PRESETS.map((preset) => (
                       <button
-                        key={`empty-${preset.title}`}
-                        className="empty-card"
+                        key={preset.title}
+                        className="prompt-pill"
                         type="button"
                         onClick={() => setPrompt(preset.prompt)}
                       >
                         <span className="material-symbols-outlined">{preset.icon}</span>
-                        <strong>{preset.title}</strong>
-                        <p>{preset.prompt}</p>
+                        <span>{preset.title}</span>
                       </button>
                     ))}
                   </div>
                 </div>
-              ) : (
+              </section>
+            ) : null}
+
+            <section className="conversation-thread">
+              {messages.length > 0 ? (
                 <div className="message-flow">
                   {messages.map((message) => (
                     <article
@@ -2265,12 +2357,7 @@ function App() {
                                 Local voice | {message.meta.tts_audio.voice || 'Piper'}
                               </span>
                             </div>
-                            <audio
-                              className="assistant-audio-player"
-                              controls
-                              preload="none"
-                              src={message.meta.tts_audio.url}
-                            />
+                            <VoicePlayer audioPayload={message.meta.tts_audio} />
                           </div>
                         ) : null}
 
@@ -2287,7 +2374,7 @@ function App() {
                     </article>
                   ))}
                 </div>
-              )}
+              ) : null}
 
             </section>
           </div>
@@ -2536,6 +2623,20 @@ function App() {
                   </span>
                 </div>
 
+                <div
+                  className={`live-caption-card ${
+                    latestAssistantTurn?.streamingState === 'streaming' ? 'is-streaming' : ''
+                  } ${
+                    latestAssistantTurn?.streamingState === 'waiting' ? 'is-waiting' : ''
+                  }`}
+                >
+                  <div className="live-caption-head">
+                    <span>Live transcript</span>
+                    <span>{liveTranscriptStatus}</span>
+                  </div>
+                  <p>{liveTranscriptText}</p>
+                </div>
+
                 <label className="field live-prompt-field">
                   <span>Live instruction</span>
                   <textarea
@@ -2647,8 +2748,27 @@ function App() {
                           key={`live-${message.id}`}
                           className={`live-turn live-turn-${message.role}`}
                         >
-                          <strong>{message.role === 'user' ? 'You' : 'Gemma 4'}</strong>
-                          <p>{message.content}</p>
+                          <div className="live-turn-head">
+                            <strong>{message.role === 'user' ? 'You' : 'Gemma 4'}</strong>
+                            {message.role === 'assistant' &&
+                            (message.streamingState === 'waiting' ||
+                              message.streamingState === 'streaming') ? (
+                              <span className="live-turn-status">
+                                <span className="stream-spinner" aria-hidden="true" />
+                                <span>
+                                  {message.streamingState === 'waiting'
+                                    ? 'Preparing'
+                                    : 'Streaming'}
+                                </span>
+                              </span>
+                            ) : null}
+                          </div>
+                          <p>
+                            {message.content ||
+                              (message.role === 'assistant'
+                                ? 'Gemma is preparing the reply...'
+                                : '')}
+                          </p>
                         </article>
                       ))}
                     </div>
@@ -2701,16 +2821,35 @@ function App() {
                   <input
                     type="number"
                     min="32"
-                    max="1024"
+                    max={isWslVllmRuntime ? NVFP4_MAX_NEW_TOKENS : 1024}
                     value={settings.maxNewTokens}
                     onChange={(event) =>
-                      setSettings((current) => ({
-                        ...current,
-                        maxNewTokens: Number(event.target.value || 256),
-                      }))
+                      setSettings((current) => {
+                        const fallbackValue = isWslVllmRuntime
+                          ? NVFP4_MAX_NEW_TOKENS
+                          : 256
+                        const parsedValue = Number(
+                          event.target.value || fallbackValue,
+                        )
+                        const clampedValue = isWslVllmRuntime
+                          ? Math.min(NVFP4_MAX_NEW_TOKENS, parsedValue)
+                          : parsedValue
+                        return {
+                          ...current,
+                          maxNewTokens: clampedValue,
+                        }
+                      })
                     }
                   />
                 </label>
+
+                {isWslVllmRuntime ? (
+                  <p className="muted-copy">
+                    The local NVFP4 bridge runs in a compact 256-token context
+                    profile on this 5090. Output is capped to 64 new tokens and
+                    older turns are compressed automatically.
+                  </p>
+                ) : null}
 
                 <label className="field">
                   <span>Temperature</span>

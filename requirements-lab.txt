@@ -1,0 +1,14 @@
+fastapi==0.135.3
+uvicorn==0.43.0
+numpy==2.4.3
+Pillow==12.1.1
+soundfile==0.13.1
+torch==2.11.0+cu128
+transformers==5.5.0
+accelerate==1.13.0
+piper-tts==1.4.2
+huggingface-hub==1.9.0
+sentencepiece==0.2.1
+safetensors==0.7.0
+python-multipart==0.0.22
+pydantic==2.12.5

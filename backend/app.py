@@ -11,6 +11,7 @@ import os
 import platform
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -66,15 +67,30 @@ WSL_VLLM_ACTIVATE = os.getenv(
 WSL_VLLM_STARTUP_TIMEOUT_SECONDS = int(
     os.getenv("GEMMA4_VLLM_STARTUP_TIMEOUT_SECONDS", "480")
 )
-WSL_VLLM_MAX_MODEL_LEN = int(os.getenv("GEMMA4_VLLM_MAX_MODEL_LEN", "512"))
+WSL_VLLM_MAX_MODEL_LEN = int(os.getenv("GEMMA4_VLLM_MAX_MODEL_LEN", "256"))
 WSL_VLLM_GPU_MEMORY_UTILIZATION = float(
     os.getenv("GEMMA4_VLLM_GPU_MEMORY_UTILIZATION", "0.94")
 )
 WSL_VLLM_MAX_NUM_SEQS = int(os.getenv("GEMMA4_VLLM_MAX_NUM_SEQS", "1"))
 WSL_VLLM_MAX_NUM_BATCHED_TOKENS = int(
-    os.getenv("GEMMA4_VLLM_MAX_NUM_BATCHED_TOKENS", "256")
+    os.getenv("GEMMA4_VLLM_MAX_NUM_BATCHED_TOKENS", "128")
 )
 WSL_VLLM_CPU_OFFLOAD_GB = float(os.getenv("GEMMA4_VLLM_CPU_OFFLOAD_GB", "0"))
+WSL_VLLM_MAX_COMPLETION_TOKENS = int(
+    os.getenv("GEMMA4_VLLM_MAX_COMPLETION_TOKENS", "64")
+)
+WSL_VLLM_APPROX_CHARS_PER_TOKEN = int(
+    os.getenv("GEMMA4_VLLM_APPROX_CHARS_PER_TOKEN", "4")
+)
+WSL_VLLM_IMAGE_TOKEN_BUDGET = int(
+    os.getenv("GEMMA4_VLLM_IMAGE_TOKEN_BUDGET", "64")
+)
+WSL_VLLM_MESSAGE_OVERHEAD_CHARS = int(
+    os.getenv("GEMMA4_VLLM_MESSAGE_OVERHEAD_CHARS", "24")
+)
+WSL_VLLM_SYSTEM_PROMPT_MAX_CHARS = int(
+    os.getenv("GEMMA4_VLLM_SYSTEM_PROMPT_MAX_CHARS", "220")
+)
 WSL_VLLM_REQUEST_TIMEOUT_SECONDS = int(
     os.getenv("GEMMA4_VLLM_REQUEST_TIMEOUT_SECONDS", "360")
 )
@@ -97,10 +113,9 @@ DOCS_NOTE = (
 QUANTIZATION_NOTE = (
     "Quantization memory estimates follow the official Google Gemma 4 overview page "
     "(updated 2026-04-02). This local backend runs the official Hugging Face "
-    "checkpoints in BF16, routes Q4_0 through a local llama.cpp runtime, and can "
-    "route NVIDIA's NVFP4 checkpoint through WSL vLLM. SFP8 is still exposed with "
-    "Google's official memory estimate, but it requires a different runtime or "
-    "checkpoint family here."
+    "checkpoints in BF16, routes Q4_0 through a local llama.cpp runtime, maps the "
+    "Google SFP8 planning slot to a practical local Q8_0 GGUF path, and can route "
+    "NVIDIA's NVFP4 checkpoint through WSL vLLM."
 )
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -145,7 +160,10 @@ MODEL_SPECS = [
         "supports_image": True,
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 9.6, "sfp8": 4.6, "q4_0": 3.2},
-        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-E2B-it-GGUF"},
+        "llama_cpp_hf_repo_ids": {
+            "q4_0": "bartowski/google_gemma-4-E2B-it-GGUF",
+            "sfp8": "ggml-org/gemma-4-E2B-it-GGUF",
+        },
         "doc_summary": "Small edge model with native audio support.",
     },
     {
@@ -162,7 +180,10 @@ MODEL_SPECS = [
         "supports_image": True,
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 15.0, "sfp8": 7.5, "q4_0": 5.0},
-        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-E4B-it-GGUF"},
+        "llama_cpp_hf_repo_ids": {
+            "q4_0": "bartowski/google_gemma-4-E4B-it-GGUF",
+            "sfp8": "ggml-org/gemma-4-E4B-it-GGUF",
+        },
         "doc_summary": "Best balanced small model with native audio support.",
     },
     {
@@ -179,7 +200,10 @@ MODEL_SPECS = [
         "supports_image": True,
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 48.0, "sfp8": 25.0, "q4_0": 15.6},
-        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF"},
+        "llama_cpp_hf_repo_ids": {
+            "q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
+            "sfp8": "ggml-org/gemma-4-26B-A4B-it-GGUF",
+        },
         "doc_summary": "Mixture-of-Experts variant tuned for faster workstation inference.",
     },
     {
@@ -197,7 +221,10 @@ MODEL_SPECS = [
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 58.3, "sfp8": 30.4, "q4_0": 17.4},
         "min_windows_commit_available_gib": 64.0,
-        "llama_cpp_hf_repo_ids": {"q4_0": "bartowski/google_gemma-4-31B-it-GGUF"},
+        "llama_cpp_hf_repo_ids": {
+            "q4_0": "bartowski/google_gemma-4-31B-it-GGUF",
+            "sfp8": "ggml-org/gemma-4-31B-it-GGUF",
+        },
         "doc_summary": "Largest dense Gemma 4 variant for local workstation use.",
     },
     {
@@ -238,10 +265,14 @@ QUANTIZATION_SPECS = [
         "key": "sfp8",
         "label": "SFP8",
         "precision_bits": 8,
-        "runtime_supported": False,
-        "status": "planning-only",
-        "runtime_family": "planning",
-        "doc_summary": "Official Google memory estimate exposed for planning. Not loadable in this Transformers backend as-is.",
+        "runtime_supported": True,
+        "status": "llama.cpp",
+        "runtime_family": "llama.cpp",
+        "hf_file_label": "Q8_0",
+        "doc_summary": (
+            "The Google SFP8 slot is mapped here to a practical local Q8_0 GGUF "
+            "runtime through llama.cpp."
+        ),
     },
     {
         "key": "q4_0",
@@ -449,7 +480,54 @@ def render_model_load_error(spec: dict, exc: Exception) -> str:
             "memory for the configured vLLM reservation. Close other GPU workloads and retry."
         )
 
+    if "cannot re-initialize the input batch when cpu weight offloading is enabled" in lowered:
+        return (
+            f"{spec['label']} hit a current vLLM limitation while CPU weight offloading was "
+            "enabled. Retry with CPU offload disabled for this model."
+        )
+
+    if "engine core initialization failed" in lowered:
+        return (
+            f"{spec['label']} failed after the weights were loaded but before the vLLM engine "
+            "finished initializing. Check the WSL vLLM log for the root cause."
+        )
+
     return f"{spec['label']} failed to load: {raw_message}"
+
+
+def parse_openai_error_detail(raw_text: str) -> str:
+    text = raw_text.strip()
+    if not text:
+        return ""
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+    error = payload.get("error")
+    if isinstance(error, dict):
+        message = error.get("message")
+        if isinstance(message, str) and message.strip():
+            return message.strip()
+
+    detail = payload.get("detail")
+    if isinstance(detail, str) and detail.strip():
+        return detail.strip()
+
+    return text
+
+
+def render_vllm_request_error(spec: dict, detail: str) -> str:
+    lowered = detail.lower()
+    if "maximum context length is" in lowered:
+        return (
+            f"{spec['label']} is running in a compact {WSL_VLLM_MAX_MODEL_LEN}-token "
+            "WSL vLLM profile on this machine. The lab trims history and caps the "
+            f"reply to about {WSL_VLLM_MAX_COMPLETION_TOKENS} new tokens, but this turn "
+            "still overflowed the context window. Shorten the prompt or clear older turns."
+        )
+    return detail
 
 
 def to_wsl_path(path: Path) -> str:
@@ -480,6 +558,36 @@ def bash_double_quote(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
+def hf_cache_repo_dir(repo_id: str, *, use_hub: bool = False) -> Path:
+    cache_root = CACHE_DIR / "hub" if use_hub else CACHE_DIR
+    return cache_root / f"models--{repo_id.replace('/', '--')}"
+
+
+def ensure_llama_cpp_repo_cache(repo_id: str) -> None:
+    direct_repo_dir = hf_cache_repo_dir(repo_id)
+    hub_repo_dir = hf_cache_repo_dir(repo_id, use_hub=True)
+    if not hub_repo_dir.exists():
+        return
+
+    if direct_repo_dir.exists():
+        if (direct_repo_dir / "snapshots").exists() and (direct_repo_dir / "refs").exists():
+            return
+        shutil.rmtree(direct_repo_dir, ignore_errors=True)
+
+    direct_repo_dir.parent.mkdir(parents=True, exist_ok=True)
+    junction = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(direct_repo_dir), str(hub_repo_dir)],
+        cwd=str(BASE_DIR),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if junction.returncode == 0 and direct_repo_dir.exists():
+        return
+
+    shutil.copytree(hub_repo_dir, direct_repo_dir, symlinks=True)
+
+
 def pil_image_to_data_url(image: Image.Image, *, quality: int = 92) -> str:
     buffer = io.BytesIO()
     normalized = image.convert("RGB")
@@ -499,6 +607,14 @@ def normalize_tts_text(text: str) -> str:
     normalized = normalized.replace("|", ", ")
     normalized = WHITESPACE_PATTERN.sub(" ", normalized)
     return normalized.strip()
+
+
+def sanitize_llama_reply(text: str) -> str:
+    cleaned = text
+    cleaned = re.sub(r"<\|?channel\|?>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^\s*(thought|analysis)\s*", "", cleaned, flags=re.IGNORECASE)
+    return cleaned.strip()
 
 
 class LocalTTSService:
@@ -652,6 +768,14 @@ class LlamaCppServerRuntime:
                 process.kill()
                 process.wait(timeout=5)
 
+    def _runtime_hf_label(self, quantization_spec: dict) -> str:
+        return str(quantization_spec.get("hf_file_label", quantization_spec["label"]))
+
+    def _gpu_layers_for(self, spec: dict, quantization_spec: dict) -> str:
+        if spec["key"] == "31b" and quantization_spec["key"] == "sfp8":
+            return "56"
+        return "999"
+
     def _build_command(self, spec: dict, quantization_spec: dict) -> list[str]:
         repo_id = spec.get("llama_cpp_hf_repo_ids", {}).get(quantization_spec["key"])
         if not repo_id:
@@ -663,12 +787,14 @@ class LlamaCppServerRuntime:
                 ),
             )
 
+        ensure_llama_cpp_repo_cache(repo_id)
+
         return [
             str(LLAMA_SERVER_BIN),
             "--hf-repo",
-            f"{repo_id}:{quantization_spec['label']}",
+            f"{repo_id}:{self._runtime_hf_label(quantization_spec)}",
             "-ngl",
-            "999",
+            self._gpu_layers_for(spec, quantization_spec),
             "--host",
             LLAMA_SERVER_HOST,
             "--port",
@@ -680,9 +806,11 @@ class LlamaCppServerRuntime:
             "off",
             "--reasoning-format",
             "none",
+            "-c",
+            "4096",
         ]
 
-    def _wait_until_ready(self, *, timeout_seconds: int = 120) -> None:
+    def _wait_until_ready(self, *, timeout_seconds: int = 300) -> None:
         deadline = time.time() + timeout_seconds
         last_error = "llama.cpp server did not become ready."
         while time.time() < deadline:
@@ -734,6 +862,9 @@ class LlamaCppServerRuntime:
         self.unload()
         command = self._build_command(spec, quantization_spec)
         emit(48, "Launching llama.cpp server...")
+        env = dict(os.environ)
+        env["HF_HOME"] = str(CACHE_DIR)
+        env["HUGGINGFACE_HUB_CACHE"] = str(CACHE_DIR)
 
         with LLAMA_SERVER_LOG_PATH.open("a", encoding="utf-8") as log_file:
             process = subprocess.Popen(
@@ -742,6 +873,7 @@ class LlamaCppServerRuntime:
                 stdout=log_file,
                 stderr=log_file,
                 text=True,
+                env=env,
             )
 
         with self._process_lock:
@@ -818,11 +950,12 @@ class LlamaCppServerRuntime:
         message = choice.get("message") or {}
         usage = response_payload.get("usage") or {}
         timings = response_payload.get("timings") or {}
+        reply = sanitize_llama_reply(message.get("content", ""))
         return {
-            "reply": message.get("content", ""),
+            "reply": reply,
             "thought": message.get("reasoning_content"),
             "raw_response": message.get("content", ""),
-            "parsed": {"role": "assistant", "content": message.get("content", "")},
+            "parsed": {"role": "assistant", "content": reply},
             "elapsed_ms": round((time.perf_counter() - started) * 1000, 1),
             "prompt_tokens": usage.get("prompt_tokens"),
             "generated_tokens": usage.get("completion_tokens"),
@@ -870,6 +1003,7 @@ class LlamaCppServerRuntime:
         reply_chunks: list[str] = []
         thought_chunks: list[str] = []
         started = time.perf_counter()
+        emitted_reply = ""
 
         try:
             with urllib.request.urlopen(request, timeout=300) as response:
@@ -889,7 +1023,12 @@ class LlamaCppServerRuntime:
                     if delta.get("content"):
                         text = delta["content"]
                         reply_chunks.append(text)
-                        yield {"event": "token", "text": text}
+                        cleaned_reply = sanitize_llama_reply("".join(reply_chunks))
+                        if len(cleaned_reply) > len(emitted_reply):
+                            delta_text = cleaned_reply[len(emitted_reply) :]
+                            emitted_reply = cleaned_reply
+                            if delta_text:
+                                yield {"event": "token", "text": delta_text}
                     if delta.get("reasoning_content"):
                         thought_chunks.append(delta["reasoning_content"])
         except urllib.error.HTTPError as exc:
@@ -901,7 +1040,7 @@ class LlamaCppServerRuntime:
                 detail="The llama.cpp runtime is unavailable on localhost.",
             ) from exc
 
-        reply = "".join(reply_chunks).strip()
+        reply = sanitize_llama_reply("".join(reply_chunks))
         thought = "".join(thought_chunks).strip() or None
         response_payload = {
             "reply": reply,
@@ -1157,7 +1296,11 @@ class WslVllmServerRuntime:
             ) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            raw_detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            detail = render_vllm_request_error(
+                get_model_spec(self._current_model_key or "31b-nvfp4"),
+                parse_openai_error_detail(raw_detail),
+            )
             raise HTTPException(status_code=exc.code, detail=detail) from exc
         except TimeoutError as exc:
             self.unload()
@@ -1218,6 +1361,99 @@ class WslVllmServerRuntime:
         )
         return messages
 
+    def _trim_text(self, text: str, max_chars: int, *, preserve_tail: bool = False) -> str:
+        normalized = text.strip()
+        if max_chars <= 0:
+            return ""
+        if len(normalized) <= max_chars:
+            return normalized
+        if max_chars <= 1:
+            return normalized[:max_chars]
+        if preserve_tail and max_chars > 3:
+            return "..." + normalized[-(max_chars - 3) :]
+        return normalized[: max_chars - 1].rstrip() + "..."
+
+    def _shape_request_payload(
+        self,
+        *,
+        prompt: str,
+        system_prompt: str,
+        history: list[HistoryTurn],
+        image: Image.Image | None,
+        max_new_tokens: int,
+        temperature: float,
+        top_p: float,
+    ) -> dict:
+        effective_max_tokens = min(
+            max(16, int(max_new_tokens)),
+            WSL_VLLM_MAX_COMPLETION_TOKENS,
+            max(16, WSL_VLLM_MAX_MODEL_LEN - 32),
+        )
+        input_budget_tokens = max(
+            48,
+            WSL_VLLM_MAX_MODEL_LEN
+            - effective_max_tokens
+            - (WSL_VLLM_IMAGE_TOKEN_BUDGET if image is not None else 0),
+        )
+        input_budget_chars = input_budget_tokens * WSL_VLLM_APPROX_CHARS_PER_TOKEN
+
+        trimmed_system_prompt = self._trim_text(
+            system_prompt,
+            min(WSL_VLLM_SYSTEM_PROMPT_MAX_CHARS, max(80, input_budget_chars // 4)),
+        )
+        remaining_for_prompt = max(
+            160,
+            input_budget_chars
+            - len(trimmed_system_prompt)
+            - (WSL_VLLM_MESSAGE_OVERHEAD_CHARS * 2),
+        )
+        trimmed_prompt = self._trim_text(prompt, remaining_for_prompt)
+
+        remaining_history_chars = max(
+            0,
+            input_budget_chars
+            - len(trimmed_system_prompt)
+            - len(trimmed_prompt)
+            - (WSL_VLLM_MESSAGE_OVERHEAD_CHARS * 2),
+        )
+        shaped_history: list[HistoryTurn] = []
+        for turn in reversed(history):
+            content = turn.content.strip()
+            if not content:
+                continue
+            turn_budget = len(content) + WSL_VLLM_MESSAGE_OVERHEAD_CHARS
+            if turn_budget <= remaining_history_chars:
+                shaped_history.append(HistoryTurn(role=turn.role, content=content))
+                remaining_history_chars -= turn_budget
+                continue
+            if not shaped_history and remaining_history_chars > (
+                WSL_VLLM_MESSAGE_OVERHEAD_CHARS + 64
+            ):
+                truncated_content = self._trim_text(
+                    content,
+                    remaining_history_chars - WSL_VLLM_MESSAGE_OVERHEAD_CHARS,
+                    preserve_tail=True,
+                )
+                if truncated_content:
+                    shaped_history.append(
+                        HistoryTurn(role=turn.role, content=truncated_content)
+                    )
+            break
+
+        shaped_history.reverse()
+        return {
+            "messages": self._build_messages(
+                prompt=trimmed_prompt,
+                system_prompt=trimmed_system_prompt,
+                history=shaped_history,
+                image=image,
+            ),
+            "stream": False,
+            "max_tokens": effective_max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+        }
+
     def generate(
         self,
         *,
@@ -1232,18 +1468,15 @@ class WslVllmServerRuntime:
         top_p: float,
     ) -> dict:
         started = time.perf_counter()
-        payload = {
-            "messages": self._build_messages(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                history=history,
-                image=image,
-            ),
-            "stream": False,
-            "max_tokens": max_new_tokens,
-            "temperature": temperature,
-            "top_p": top_p,
-        }
+        payload = self._shape_request_payload(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history=history,
+            image=image,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
         response_payload = self._request_json("/v1/chat/completions", payload)
         choice = (response_payload.get("choices") or [{}])[0]
         message = choice.get("message") or {}
@@ -1279,18 +1512,16 @@ class WslVllmServerRuntime:
         top_p: float,
         tts_enabled: bool,
     ):
-        payload = {
-            "messages": self._build_messages(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                history=history,
-                image=image,
-            ),
-            "stream": True,
-            "max_tokens": max_new_tokens,
-            "temperature": temperature,
-            "top_p": top_p,
-        }
+        payload = self._shape_request_payload(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            history=history,
+            image=image,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        payload["stream"] = True
         request = urllib.request.Request(
             f"{WSL_VLLM_URL}/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -1326,7 +1557,8 @@ class WslVllmServerRuntime:
                     if delta.get("reasoning_content"):
                         thought_chunks.append(delta["reasoning_content"])
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            raw_detail = exc.read().decode("utf-8", "ignore").strip() or str(exc)
+            detail = render_vllm_request_error(spec, parse_openai_error_detail(raw_detail))
             raise HTTPException(status_code=exc.code, detail=detail) from exc
         except TimeoutError as exc:
             self.unload()
@@ -1624,47 +1856,53 @@ class GemmaService:
         def emit(progress: int, message: str) -> None:
             if progress_callback is not None:
                 progress_callback(progress, message)
+        runtime_family = quantization_spec.get("runtime_family")
 
-        if quantization_spec.get("runtime_family") == "llama.cpp":
-            if self.is_loaded and self._runtime_family == "llama.cpp" and (
-                self._current_model_key == requested_key
+        if (
+            self.is_loaded
+            and self._runtime_family == runtime_family
+            and self._current_model_key == requested_key
+            and self._current_quantization_key == requested_quantization_key
+        ):
+            emit(
+                100,
+                f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+            )
+            if runtime_family == "transformers":
+                return self._processor, self._model, spec, quantization_spec
+            return None, None, spec, quantization_spec
+
+        with self._load_lock:
+            if (
+                self.is_loaded
+                and self._runtime_family == runtime_family
+                and self._current_model_key == requested_key
                 and self._current_quantization_key == requested_quantization_key
             ):
                 emit(
                     100,
                     f"{spec['label']} is already loaded in {quantization_spec['label']}.",
                 )
+                if runtime_family == "transformers":
+                    return self._processor, self._model, spec, quantization_spec
                 return None, None, spec, quantization_spec
 
-            with self._load_lock:
-                if self.is_loaded and self._runtime_family == "llama.cpp" and (
-                    self._current_model_key == requested_key
-                    and self._current_quantization_key == requested_quantization_key
-                ):
-                    emit(
-                        100,
-                        f"{spec['label']} is already loaded in {quantization_spec['label']}.",
-                    )
-                    return None, None, spec, quantization_spec
+            if self.is_loaded:
+                emit(18, "Releasing the previous model from VRAM...")
+                self._unload_current_model()
 
-                quantization_error = preflight_quantization_support(spec, quantization_spec)
-                if quantization_error is not None:
-                    logger.warning(
-                        "Model load blocked key=%s quantization=%s detail=%s",
-                        spec["key"],
-                        quantization_spec["key"],
-                        quantization_error,
-                    )
-                    raise HTTPException(status_code=501, detail=quantization_error)
+            emit(8, "Checking quantization support...")
+            quantization_error = preflight_quantization_support(spec, quantization_spec)
+            if quantization_error is not None:
+                logger.warning(
+                    "Model load blocked key=%s quantization=%s detail=%s",
+                    spec["key"],
+                    quantization_spec["key"],
+                    quantization_error,
+                )
+                raise HTTPException(status_code=501, detail=quantization_error)
 
-                if self.is_loaded and (
-                    self._current_model_key != requested_key
-                    or self._current_quantization_key != requested_quantization_key
-                    or self._runtime_family != "llama.cpp"
-                ):
-                    emit(28, "Releasing the previous model from VRAM...")
-                    self._unload_current_model()
-
+            if runtime_family == "llama.cpp":
                 try:
                     self._llama_cpp_runtime.load(
                         spec,
@@ -1697,46 +1935,7 @@ class GemmaService:
                     )
                     raise HTTPException(status_code=503, detail=detail) from exc
 
-        if quantization_spec.get("runtime_family") == "vllm-wsl":
-            if self.is_loaded and self._runtime_family == "vllm-wsl" and (
-                self._current_model_key == requested_key
-                and self._current_quantization_key == requested_quantization_key
-            ):
-                emit(
-                    100,
-                    f"{spec['label']} is already loaded in {quantization_spec['label']}.",
-                )
-                return None, None, spec, quantization_spec
-
-            with self._load_lock:
-                if self.is_loaded and self._runtime_family == "vllm-wsl" and (
-                    self._current_model_key == requested_key
-                    and self._current_quantization_key == requested_quantization_key
-                ):
-                    emit(
-                        100,
-                        f"{spec['label']} is already loaded in {quantization_spec['label']}.",
-                    )
-                    return None, None, spec, quantization_spec
-
-                quantization_error = preflight_quantization_support(spec, quantization_spec)
-                if quantization_error is not None:
-                    logger.warning(
-                        "Model load blocked key=%s quantization=%s detail=%s",
-                        spec["key"],
-                        quantization_spec["key"],
-                        quantization_error,
-                    )
-                    raise HTTPException(status_code=501, detail=quantization_error)
-
-                if self.is_loaded and (
-                    self._current_model_key != requested_key
-                    or self._current_quantization_key != requested_quantization_key
-                    or self._runtime_family != "vllm-wsl"
-                ):
-                    emit(22, "Releasing the previous model from VRAM...")
-                    self._unload_current_model()
-
+            if runtime_family == "vllm-wsl":
                 try:
                     self._wsl_vllm_runtime.load(
                         spec,
@@ -1769,46 +1968,18 @@ class GemmaService:
                     )
                     raise HTTPException(status_code=503, detail=detail) from exc
 
-        if (
-            self.is_loaded
-            and self._runtime_family == "transformers"
-            and self._current_model_key == requested_key
-            and self._current_quantization_key == requested_quantization_key
-        ):
-            emit(
-                100,
-                f"{spec['label']} is already loaded in {quantization_spec['label']}.",
-            )
-            return self._processor, self._model, spec, quantization_spec
-
-        with self._load_lock:
-            if (
-                self.is_loaded
-                and self._runtime_family == "transformers"
-                and self._current_model_key == requested_key
-                and self._current_quantization_key == requested_quantization_key
-            ):
-                emit(
-                    100,
-                    f"{spec['label']} is already loaded in {quantization_spec['label']}.",
+            if runtime_family != "transformers":
+                raise HTTPException(
+                    status_code=501,
+                    detail=(
+                        f"{quantization_spec['label']} uses an unsupported runtime family: "
+                        f"{runtime_family}"
+                    ),
                 )
-                return self._processor, self._model, spec, quantization_spec
-
-            emit(8, "Checking quantization support...")
-            quantization_error = preflight_quantization_support(spec, quantization_spec)
-            if quantization_error is not None:
-                logger.warning(
-                    "Model load blocked key=%s quantization=%s detail=%s",
-                    spec["key"],
-                    quantization_spec["key"],
-                    quantization_error,
-                )
-                raise HTTPException(status_code=501, detail=quantization_error)
 
             emit(16, "Checking workstation memory and commit availability...")
             preflight_error = preflight_model_load(spec)
             if preflight_error is not None:
-                self._unload_current_model()
                 logger.warning(
                     "Model load blocked key=%s quantization=%s hf_model_id=%s detail=%s",
                     spec["key"],
@@ -1820,13 +1991,6 @@ class GemmaService:
 
             emit(24, "Preparing local cache and tokenizer assets...")
             CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-            if self.is_loaded and (
-                self._current_model_key != requested_key
-                or self._current_quantization_key != requested_quantization_key
-            ):
-                emit(32, "Releasing the previous model from VRAM...")
-                self._unload_current_model()
 
             try:
                 emit(46, "Loading processor assets from the local cache...")
@@ -2046,18 +2210,33 @@ class GemmaService:
         return self._processor, self._model, spec, quantization_spec
 
     def health(self) -> dict:
-        active_spec = get_model_spec(self._current_model_key or DEFAULT_MODEL_KEY)
-        active_quantization = get_quantization_spec(
-            self._current_quantization_key or DEFAULT_QUANTIZATION_KEY
-        )
+        active_spec = None
+        active_quantization = None
+        if self.is_loaded:
+            active_spec = (
+                get_model_spec(self._current_model_key)
+                if self._current_model_key is not None
+                else None
+            )
+            active_quantization = (
+                get_quantization_spec(self._current_quantization_key)
+                if self._current_quantization_key is not None
+                else None
+            )
         windows_commit_snapshot = get_windows_commit_snapshot()
         gpu_total_memory_gib = get_gpu_total_memory_gib()
         return {
             "status": "ready",
-            "active_model_key": active_spec["key"],
-            "active_model": serialize_model_spec(active_spec),
-            "active_quantization_key": active_quantization["key"],
-            "active_quantization": serialize_quantization_spec(active_quantization),
+            "active_model_key": active_spec["key"] if active_spec else None,
+            "active_model": serialize_model_spec(active_spec) if active_spec else None,
+            "active_quantization_key": (
+                active_quantization["key"] if active_quantization else None
+            ),
+            "active_quantization": (
+                serialize_quantization_spec(active_quantization)
+                if active_quantization
+                else None
+            ),
             "runtime_family": self._runtime_family,
             "tts": tts_service.health(),
             "loaded": self.is_loaded,

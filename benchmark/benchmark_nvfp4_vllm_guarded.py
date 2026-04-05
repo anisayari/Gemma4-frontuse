@@ -14,6 +14,7 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent
 RESULTS_DIR = BASE_DIR / "benchmark" / "results"
 LOG_DIR = BASE_DIR / "logs"
+HF_CACHE_DIR = BASE_DIR / ".hf-cache"
 RUN_LOG_PATH = LOG_DIR / "nvfp4-benchmark-run.log"
 WATCHDOG_LOG_PATH = LOG_DIR / "nvfp4-benchmark-watchdog.log"
 LATEST_RESULT_PATH = RESULTS_DIR / "gemma4-nvfp4-vllm-benchmark-latest.json"
@@ -190,6 +191,8 @@ def main() -> None:
         [
             "set -euo pipefail;",
             f"source {bash_double_quote(expand_wsl_home(args.wsl_activate))};",
+            f"export HF_HOME={bash_double_quote(to_wsl_path(HF_CACHE_DIR))};",
+            f"export HUGGINGFACE_HUB_CACHE={bash_double_quote(to_wsl_path(HF_CACHE_DIR))};",
             "export VLLM_NVFP4_GEMM_BACKEND=cutlass;",
             f"export NVFP4_MAX_MODEL_LEN={args.max_model_len};",
             f"export NVFP4_GPU_MEMORY_UTILIZATION={args.gpu_memory_utilization};",

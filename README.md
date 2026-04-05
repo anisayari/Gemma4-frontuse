@@ -9,6 +9,82 @@ Local Gemma 4 workstation lab with:
 - experimental WSL `vLLM` bridge for `nvidia/Gemma-4-31B-IT-NVFP4`
 - benchmark scripts and benchmark reports
 
+## Install and launch
+
+### First-time full install
+
+Use the bootstrap script below if you want the repo to install its Python deps, web deps, `llama.cpp`, the WSL `vLLM` env for `NVFP4`, the Piper voice, then prefetch every Gemma checkpoint used by the lab:
+
+```powershell
+.\install_and_run_gemma4_lab.ps1
+```
+
+What it does:
+
+- creates or reuses `.venv`
+- installs Python packages from `requirements-lab.txt`
+- runs `npm ci` and `npm run build` in [web/package.json](C:/Users/Anis AYARI/Desktop/projects/gemma4-test/web/package.json)
+- installs the pinned Windows CUDA `llama.cpp` binaries if `tools/llama.cpp/bin` is missing
+- prepares `~/vllm-gemma4` inside `WSL Ubuntu` for `nvidia/Gemma-4-31B-IT-NVFP4`
+- predownloads BF16 Gemma 4, GGUF quantized checkpoints, the NVIDIA `NVFP4` checkpoint, and the default Piper voice
+- launches the lab on [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+Important notes:
+
+- the default bootstrap is intentionally heavy and can download a lot of data because it prefetches every model family used by the lab
+- `NVFP4` setup expects a `WSL` distro named `Ubuntu`
+- the Windows and WSL runtimes now share the same Hugging Face cache in `.\.hf-cache`, so the NVIDIA path does not redownload weights once they are prefetched
+
+### Quick relaunch
+
+Once the environment is already installed, the fast path is:
+
+```powershell
+.\run_gemma4_lab.ps1
+```
+
+That script rebuilds the frontend, stops any previous process already bound to port `8000`, and starts the FastAPI app.
+
+### Install only
+
+If you want to prepare everything without immediately starting the server:
+
+```powershell
+.\install_and_run_gemma4_lab.ps1 -InstallOnly
+```
+
+### Useful bootstrap flags
+
+```powershell
+.\install_and_run_gemma4_lab.ps1 -InstallOnly -SkipWSLNVFP4
+.\install_and_run_gemma4_lab.ps1 -InstallOnly -SkipModelDownloads
+.\install_and_run_gemma4_lab.ps1 -InstallOnly -SkipGGUF -SkipNVFP4
+```
+
+These are the main switches:
+
+- `-SkipWSLNVFP4`: skip the `WSL vLLM` environment for the NVIDIA model
+- `-SkipModelDownloads`: install dependencies only, without prefetching checkpoints
+- `-SkipBF16`: skip the official Google BF16 checkpoints
+- `-SkipGGUF`: skip the `llama.cpp` quantized checkpoints
+- `-SkipNVFP4`: skip the NVIDIA `nvidia/Gemma-4-31B-IT-NVFP4` checkpoint
+- `-SkipTTS`: skip the local Piper voice assets
+
+### Prefetch only
+
+If you already have the env and just want to fill the shared cache manually:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\prefetch_gemma4_assets.py
+```
+
+Examples:
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\prefetch_gemma4_assets.py --skip-nvfp4
+.\.venv\Scripts\python.exe .\scripts\prefetch_gemma4_assets.py --skip-gguf --skip-tts
+```
+
 ## Benchmark setup
 
 - GPU: `NVIDIA GeForce RTX 5090 32 GB`
@@ -25,8 +101,33 @@ Three benchmark paths were measured:
 Important note:
 
 - the Google table you sent lists `BF16 / SFP8 / Q4_0`
-- the practical 8-bit benchmark I measured locally is `Q8_0`, not the exact Google `SFP8` format
+- in the live lab UI, the `SFP8` slot is now routed to a practical local `Q8_0 GGUF` runtime through `llama.cpp`
+- the practical 8-bit benchmark I measured locally is therefore `Q8_0`, not the exact Google `SFP8` tensor format
 - the practical 4-bit benchmark I measured locally is `Q4_0`
+
+## Current runtime mapping in the lab
+
+This is what the current app actually does when you click `Load model`:
+
+| UI quantization | Actual local runtime | Checkpoint family |
+| --- | --- | --- |
+| `BF16` | `Transformers` | official Hugging Face Google checkpoints |
+| `SFP8` | `llama.cpp` | `Q8_0 GGUF` fallback used as the local 8-bit path |
+| `Q4_0` | `llama.cpp` | `Q4_0 GGUF` |
+| `NVFP4` | `vLLM` on `WSL Ubuntu` | `nvidia/Gemma-4-31B-IT-NVFP4` |
+
+Load status validated in the current lab build:
+
+- `Gemma 4 E2B / SFP8` loads and answers through `llama.cpp`
+- `Gemma 4 E4B / SFP8` loads through `llama.cpp`
+- `Gemma 4 26B A4B / SFP8` loads through `llama.cpp`
+- `Gemma 4 31B / SFP8` loads and answers through `llama.cpp`
+- `Gemma 4 31B IT NVFP4 / NVFP4` loads and answers through `WSL vLLM`
+
+Note:
+
+- the benchmark tables below are historical measurements from the earlier benchmark runs saved in `benchmark/results`
+- the live load matrix above reflects the current app runtime after the cache-routing and `SFP8 -> Q8_0` fixes
 
 ## Generation throughput graphs
 
@@ -124,7 +225,7 @@ NVFP4 notes:
 
 - the official NVIDIA model card targets `vLLM`, `NVIDIA Blackwell`, and preferred OS `Linux`
 - on this machine, the model now runs through a local `WSL` bridge in the lab
-- the lab runtime defaults to `max_model_len=512` so text and image turns fit cleanly
+- the lab runtime defaults to `max_model_len=256` so text and image turns fit cleanly on this RTX 5090 setup
 - the throughput benchmark stays at `256` context because that was the most stable high-pressure config for measuring decode speed
 
 ## Quick takeaways
