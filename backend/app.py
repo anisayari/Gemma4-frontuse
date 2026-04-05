@@ -56,6 +56,7 @@ LLAMA_SERVER_BIN = BASE_DIR / "tools" / "llama.cpp" / "bin" / "llama-server.exe"
 LLAMA_SERVER_HOST = "127.0.0.1"
 LLAMA_SERVER_PORT = 8011
 LLAMA_SERVER_URL = f"http://{LLAMA_SERVER_HOST}:{LLAMA_SERVER_PORT}"
+LLAMA_SERVER_CACHE_RAM_MIB = int(os.getenv("GEMMA4_LLAMA_CACHE_RAM_MIB", "2048"))
 WSL_VLLM_DISTRO = os.getenv("GEMMA4_VLLM_WSL_DISTRO", "Ubuntu")
 WSL_VLLM_HOST = "127.0.0.1"
 WSL_VLLM_PORT = int(os.getenv("GEMMA4_VLLM_PORT", "8012"))
@@ -408,6 +409,32 @@ def get_windows_commit_snapshot() -> dict | None:
     }
 
 
+def log_runtime_memory_snapshot(context: str) -> None:
+    snapshot = get_windows_commit_snapshot()
+    gpu_total = get_gpu_total_memory_gib()
+    if snapshot is None:
+        logger.info(
+            "Memory snapshot context=%s gpu_total_gib=%s vram_allocated_gib=%s vram_reserved_gib=%s",
+            context,
+            gpu_total,
+            round(torch.cuda.memory_allocated() / (1024**3), 2) if torch.cuda.is_available() else None,
+            round(torch.cuda.memory_reserved() / (1024**3), 2) if torch.cuda.is_available() else None,
+        )
+        return
+
+    logger.info(
+        "Memory snapshot context=%s free_ram_gib=%s free_commit_gib=%s total_ram_gib=%s commit_limit_gib=%s gpu_total_gib=%s vram_allocated_gib=%s vram_reserved_gib=%s",
+        context,
+        snapshot["available_physical_gib"],
+        snapshot["available_commit_gib"],
+        snapshot["total_physical_gib"],
+        snapshot["commit_limit_gib"],
+        gpu_total,
+        round(torch.cuda.memory_allocated() / (1024**3), 2) if torch.cuda.is_available() else None,
+        round(torch.cuda.memory_reserved() / (1024**3), 2) if torch.cuda.is_available() else None,
+    )
+
+
 def preflight_model_load(spec: dict) -> str | None:
     snapshot = get_windows_commit_snapshot()
     if snapshot is None:
@@ -639,6 +666,59 @@ def get_listening_pids_for_port(port: int) -> set[int]:
     return pids
 
 
+def get_llama_server_process_ids() -> set[int]:
+    script = """
+$items = Get-CimInstance Win32_Process -Filter "name = 'llama-server.exe'" |
+  Select-Object ProcessId, CommandLine
+$items | ConvertTo-Json -Compress
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=15,
+        )
+    except Exception:
+        logger.exception("Failed to inspect llama-server processes")
+        return set()
+
+    stdout_text = result.stdout if isinstance(result.stdout, str) else ""
+    if not stdout_text.strip():
+        return set()
+
+    try:
+        payload = json.loads(stdout_text)
+    except json.JSONDecodeError:
+        logger.warning("Unable to parse llama-server process snapshot: %s", stdout_text[:400])
+        return set()
+
+    if isinstance(payload, dict):
+        payload = [payload]
+    if not isinstance(payload, list):
+        return set()
+
+    runtime_bin = str(LLAMA_SERVER_BIN).lower()
+    runtime_port = f"--port {LLAMA_SERVER_PORT}"
+    pids: set[int] = set()
+
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        command_line = str(item.get("CommandLine") or "")
+        if not command_line:
+            continue
+        lowered = command_line.lower()
+        if runtime_bin not in lowered and runtime_port not in lowered:
+            continue
+        process_id = item.get("ProcessId")
+        if isinstance(process_id, int):
+            pids.add(process_id)
+    return pids
+
+
 def kill_process_ids(pids: set[int], *, exclude_pid: int | None = None) -> None:
     for pid in sorted(pids):
         if exclude_pid is not None and pid == exclude_pid:
@@ -826,9 +906,23 @@ class LlamaCppServerRuntime:
         self._process_lock = threading.Lock()
         self._current_model_key: str | None = None
         self._current_quantization_key: str | None = None
+        try:
+            self._cleanup_stale_processes()
+        except Exception:
+            logger.exception("Initial llama.cpp stale process cleanup failed")
 
     def _cleanup_stale_processes(self, *, exclude_pid: int | None = None) -> None:
-        kill_process_ids(get_listening_pids_for_port(LLAMA_SERVER_PORT), exclude_pid=exclude_pid)
+        candidate_pids = get_listening_pids_for_port(LLAMA_SERVER_PORT) | get_llama_server_process_ids()
+        if exclude_pid is not None:
+            candidate_pids.discard(exclude_pid)
+        if not candidate_pids:
+            return
+        logger.warning(
+            "Cleaning stale llama.cpp processes pids=%s port=%s",
+            sorted(candidate_pids),
+            LLAMA_SERVER_PORT,
+        )
+        kill_process_ids(candidate_pids, exclude_pid=exclude_pid)
 
     @property
     def is_loaded(self) -> bool:
@@ -854,17 +948,22 @@ class LlamaCppServerRuntime:
             self._current_quantization_key = None
 
         if process is None:
+            self._cleanup_stale_processes()
+            log_runtime_memory_snapshot("llama.cpp-unload-no-tracked-process")
             return
 
         if process.poll() is None:
+            logger.info("Terminating tracked llama.cpp process pid=%s", process.pid)
             process.terminate()
             try:
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
+                logger.warning("Force killing tracked llama.cpp process pid=%s after timeout", process.pid)
                 process.kill()
                 process.wait(timeout=5)
 
         self._cleanup_stale_processes()
+        log_runtime_memory_snapshot("llama.cpp-unload-finished")
 
     def _runtime_hf_label(self, quantization_spec: dict) -> str:
         return str(quantization_spec.get("hf_file_label", quantization_spec["label"]))
@@ -904,6 +1003,8 @@ class LlamaCppServerRuntime:
             "off",
             "--reasoning-format",
             "none",
+            "--cache-ram",
+            str(max(0, LLAMA_SERVER_CACHE_RAM_MIB)),
             "-c",
             "4096",
         ]
@@ -957,9 +1058,18 @@ class LlamaCppServerRuntime:
             )
 
         emit(32, "Releasing the previous quantized runtime...")
+        log_runtime_memory_snapshot(
+            f"llama.cpp-load-before-unload:{spec['key']}:{quantization_spec['key']}"
+        )
         self.unload()
         self._cleanup_stale_processes()
         command = self._build_command(spec, quantization_spec)
+        logger.info(
+            "Launching llama.cpp model key=%s quantization=%s command=%s",
+            spec["key"],
+            quantization_spec["key"],
+            command,
+        )
         emit(48, "Launching llama.cpp server...")
         env = dict(os.environ)
         env["HF_HOME"] = str(CACHE_DIR)
@@ -977,11 +1087,34 @@ class LlamaCppServerRuntime:
 
         with self._process_lock:
             self._process = process
-            self._current_model_key = spec["key"]
-            self._current_quantization_key = quantization_spec["key"]
 
         emit(76, "Waiting for llama.cpp to finish loading the quantized model...")
-        self._wait_until_ready()
+        try:
+            self._wait_until_ready()
+        except Exception:
+            logger.exception(
+                "llama.cpp process failed during readiness key=%s quantization=%s pid=%s",
+                spec["key"],
+                quantization_spec["key"],
+                process.pid,
+            )
+            self.unload()
+            raise
+
+        with self._process_lock:
+            if self._process is process and process.poll() is None:
+                self._current_model_key = spec["key"]
+                self._current_quantization_key = quantization_spec["key"]
+
+        logger.info(
+            "llama.cpp model ready key=%s quantization=%s pid=%s",
+            spec["key"],
+            quantization_spec["key"],
+            process.pid,
+        )
+        log_runtime_memory_snapshot(
+            f"llama.cpp-load-ready:{spec['key']}:{quantization_spec['key']}"
+        )
         emit(100, f"{spec['label']} is ready in {quantization_spec['label']}.")
 
     def _request_json(self, path: str, payload: dict) -> dict:
@@ -1900,6 +2033,12 @@ class GemmaService:
             )
 
     def _unload_current_model(self) -> None:
+        logger.info(
+            "Unloading current model runtime_family=%s model_key=%s quantization=%s",
+            self._runtime_family,
+            self._current_model_key,
+            self._current_quantization_key,
+        )
         self._llama_cpp_runtime.unload()
         self._wsl_vllm_runtime.unload()
         self._processor = None
@@ -1911,6 +2050,7 @@ class GemmaService:
         gc.collect()
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        log_runtime_memory_snapshot("service-unload-finished")
 
     def _build_messages(
         self,
@@ -2980,11 +3120,17 @@ async def api_generate(
         )
     )
     logger.info(
-        "Generate execution key=%s quantization=%s thinking=%s tts=%s",
+        "Generate execution key=%s quantization=%s thinking=%s tts=%s prompt_chars=%s system_prompt_chars=%s history_turns=%s max_new_tokens=%s image=%s audio=%s",
         spec["key"],
         quantization_spec["key"],
         thinking,
         tts_enabled,
+        len(normalized_prompt),
+        len(normalized_system_prompt),
+        len(history),
+        max(32, min(max_new_tokens, 1024)),
+        image_payload is not None,
+        audio_payload is not None,
     )
 
     response_payload = service.generate(
@@ -3045,11 +3191,17 @@ async def api_generate_stream(
         )
     )
     logger.info(
-        "Generate stream execution key=%s quantization=%s thinking=%s tts=%s",
+        "Generate stream execution key=%s quantization=%s thinking=%s tts=%s prompt_chars=%s system_prompt_chars=%s history_turns=%s max_new_tokens=%s image=%s audio=%s",
         spec["key"],
         quantization_spec["key"],
         thinking,
         tts_enabled,
+        len(normalized_prompt),
+        len(normalized_system_prompt),
+        len(history),
+        max(32, min(max_new_tokens, 1024)),
+        image_payload is not None,
+        audio_payload is not None,
     )
 
     def event_stream():
