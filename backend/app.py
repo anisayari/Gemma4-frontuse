@@ -200,6 +200,7 @@ MODEL_SPECS = [
         "supports_image": True,
         "supports_text": True,
         "memory_requirements_gib": {"bf16": 48.0, "sfp8": 25.0, "q4_0": 15.6},
+        "min_windows_physical_available_gib": 50.0,
         "llama_cpp_hf_repo_ids": {
             "q4_0": "bartowski/google_gemma-4-26B-A4B-it-GGUF",
             "sfp8": "ggml-org/gemma-4-26B-A4B-it-GGUF",
@@ -407,15 +408,28 @@ def get_windows_commit_snapshot() -> dict | None:
 
 
 def preflight_model_load(spec: dict) -> str | None:
-    required_commit_gib = spec.get("min_windows_commit_available_gib")
-    if required_commit_gib is None:
-        return None
-
     snapshot = get_windows_commit_snapshot()
     if snapshot is None:
         return None
 
-    if snapshot["available_commit_gib"] < required_commit_gib:
+    required_physical_gib = spec.get("min_windows_physical_available_gib")
+    if (
+        required_physical_gib is not None
+        and snapshot["available_physical_gib"] < required_physical_gib
+    ):
+        return (
+            f"{spec['label']} was blocked before loading because Windows only has "
+            f"{snapshot['available_physical_gib']:.2f} GiB of free RAM right now, and "
+            f"this bf16 path needs about {spec['memory_requirements_gib'].get('bf16', required_physical_gib):.1f} GiB "
+            "for the weights plus a bit of headroom for the Python runtime. Free some system "
+            "memory and retry, or switch to SFP8 / Q4_0 for this model."
+        )
+
+    required_commit_gib = spec.get("min_windows_commit_available_gib")
+    if (
+        required_commit_gib is not None
+        and snapshot["available_commit_gib"] < required_commit_gib
+    ):
         return (
             f"{spec['label']} was blocked before loading because Windows only has "
             f"{snapshot['available_commit_gib']:.2f} GiB of commit memory available, and "
@@ -577,7 +591,7 @@ def get_listening_pids_for_port(port: int) -> set[int]:
         logger.exception("Failed to inspect TCP listeners for port=%s", port)
         return set()
 
-    stdout_text = result.stdout or ""
+    stdout_text = result.stdout if isinstance(result.stdout, str) else ""
     pids: set[int] = set()
     needle = f":{port}"
     for line in stdout_text.splitlines():

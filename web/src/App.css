@@ -1184,17 +1184,142 @@
   font-size: 0.78rem;
 }
 
-.message-copy p,
-.thought-card p {
-  margin: 0;
-  white-space: pre-wrap;
-  line-height: 1.62;
+.markdown-body {
+  color: var(--on-surface);
+  line-height: 1.68;
   font-size: 0.95rem;
+  overflow-wrap: anywhere;
 }
 
-.assistant-panel .message-copy p,
-.thought-card p {
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table,
+.markdown-body hr {
+  margin: 0.85rem 0 0;
+}
+
+.markdown-body li + li {
+  margin-top: 0.3rem;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.3rem;
+}
+
+.markdown-body a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: rgba(136, 173, 255, 0.45);
+  text-underline-offset: 0.18rem;
+}
+
+.markdown-body strong {
+  color: var(--on-surface);
+}
+
+.markdown-body em {
+  color: rgba(222, 229, 255, 0.86);
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 1rem 0 0;
+  color: var(--on-surface);
+  font-family: var(--font-headline);
+  letter-spacing: -0.03em;
+  line-height: 1.18;
+}
+
+.markdown-body h1 {
+  font-size: 1.35rem;
+}
+
+.markdown-body h2 {
+  font-size: 1.18rem;
+}
+
+.markdown-body h3,
+.markdown-body h4 {
+  font-size: 1.02rem;
+}
+
+.markdown-body code {
+  padding: 0.16rem 0.38rem;
+  border-radius: 0.5rem;
+  background: rgba(6, 14, 32, 0.88);
+  color: #f8faff;
+  font-size: 0.88em;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+}
+
+.markdown-pre {
+  overflow-x: auto;
+  padding: 0.95rem 1rem;
+  border-radius: 1rem;
+  background: rgba(6, 14, 32, 0.94);
+  box-shadow: inset 0 0 0 1px rgba(136, 173, 255, 0.08);
+}
+
+.markdown-pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  color: #f8faff;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.markdown-body blockquote {
+  padding: 0.1rem 0 0.1rem 0.9rem;
+  border-left: 0.2rem solid rgba(136, 173, 255, 0.4);
+  color: rgba(193, 209, 235, 0.92);
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 0.62rem 0.7rem;
+  text-align: left;
+  border-bottom: 1px solid rgba(109, 117, 140, 0.18);
+}
+
+.markdown-body th {
+  color: var(--on-surface);
+  font-weight: 700;
+}
+
+.assistant-panel .markdown-body,
+.markdown-body-thought {
   color: var(--on-secondary-container);
+}
+
+.assistant-panel .markdown-body strong,
+.markdown-body-thought strong {
+  color: var(--on-surface);
+}
+
+.assistant-panel .markdown-body em,
+.markdown-body-thought em {
+  color: rgba(193, 209, 235, 0.92);
 }
 
 .assistant-audio-card {

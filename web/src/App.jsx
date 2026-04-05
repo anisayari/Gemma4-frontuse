@@ -1,4 +1,7 @@
 import { startTransition, useEffect, useRef, useState } from 'react'
+import ReactMarkdown from 'react-markdown'
+import remarkBreaks from 'remark-breaks'
+import remarkGfm from 'remark-gfm'
 import './App.css'
 
 const DEFAULT_MODEL_KEY = 'e4b'
@@ -307,6 +310,30 @@ function VoicePlayer({ audioPayload }) {
         </div>
       </div>
     </div>
+  )
+}
+
+function MarkdownBlock({ content, variant = 'assistant' }) {
+  if (!content) {
+    return null
+  }
+
+  return (
+    <ReactMarkdown
+      className={`markdown-body markdown-body-${variant}`}
+      remarkPlugins={[remarkGfm, remarkBreaks]}
+      components={{
+        a: ({ ...props }) => <a {...props} rel="noreferrer" target="_blank" />,
+        pre: ({ ...props }) => <pre className="markdown-pre" {...props} />,
+        code: ({ className, children, ...props }) => (
+          <code className={className} {...props}>
+            {children}
+          </code>
+        ),
+      }}
+    >
+      {content}
+    </ReactMarkdown>
   )
 }
 
@@ -1829,22 +1856,39 @@ function App() {
     }
   }
 
-  async function handleSubmit(event) {
-    event.preventDefault()
-
+  async function submitComposerTurn() {
     const normalizedPrompt = makeFallbackPrompt(prompt, imageFile, audioFile)
     if (!normalizedPrompt) {
       setError('Add a prompt, image, or audio before sending.')
       return
     }
 
-    await runTurn({
+    return runTurn({
       promptText: normalizedPrompt,
       imageAsset: imageFile,
       audioAsset: audioFile,
       visibleText: normalizedPrompt,
       clearComposer: true,
     })
+  }
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    await submitComposerTurn()
+  }
+
+  function handleComposerKeyDown(event) {
+    if (
+      event.key !== 'Enter' ||
+      event.shiftKey ||
+      event.nativeEvent?.isComposing ||
+      isSending
+    ) {
+      return
+    }
+
+    event.preventDefault()
+    void submitComposerTurn()
   }
 
   return (
@@ -2339,13 +2383,18 @@ function App() {
                               </span>
                             </div>
                           ) : null}
-                          {message.content ? <p>{message.content}</p> : null}
+                          {message.content ? (
+                            <MarkdownBlock
+                              content={message.content}
+                              variant={message.role === 'assistant' ? 'assistant' : 'user'}
+                            />
+                          ) : null}
                         </div>
 
                         {message.thought ? (
                           <details className="thought-card">
                             <summary>Thinking trace</summary>
-                            <p>{message.thought}</p>
+                            <MarkdownBlock content={message.thought} variant="thought" />
                           </details>
                         ) : null}
 
@@ -2451,6 +2500,7 @@ function App() {
                   className="composer-textarea"
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
+                  onKeyDown={handleComposerKeyDown}
                   placeholder="Message Gemma 4..."
                   rows={1}
                 />
