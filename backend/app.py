@@ -214,48 +214,6 @@ MODEL_SPECS = [
         },
         "doc_summary": "Mixture-of-Experts variant tuned for faster workstation inference.",
     },
-    {
-        "key": "31b",
-        "label": "Gemma 4 31B",
-        "hf_model_id": "google/gemma-4-31B-it",
-        "architecture": "Dense",
-        "tier": "Workstation",
-        "context_length": "256K",
-        "parameter_summary": "30.7B dense",
-        "active_parameter_summary": "30.7B active",
-        "supported_modalities": ["text", "image"],
-        "supports_audio": False,
-        "supports_image": True,
-        "supports_text": True,
-        "memory_requirements_gib": {"bf16": 58.3, "sfp8": 30.4, "q4_0": 17.4},
-        "min_windows_commit_available_gib": 64.0,
-        "llama_cpp_hf_repo_ids": {
-            "q4_0": "bartowski/google_gemma-4-31B-it-GGUF",
-            "sfp8": "ggml-org/gemma-4-31B-it-GGUF",
-        },
-        "doc_summary": "Largest dense Gemma 4 variant for local workstation use.",
-    },
-    {
-        "key": "31b-nvfp4",
-        "label": "Gemma 4 31B IT NVFP4",
-        "hf_model_id": "nvidia/Gemma-4-31B-IT-NVFP4",
-        "architecture": "Dense",
-        "tier": "Blackwell",
-        "context_length": "256K",
-        "parameter_summary": "30.7B dense / NVIDIA ModelOpt NVFP4",
-        "active_parameter_summary": "30.7B active",
-        "supported_modalities": ["text", "image", "video"],
-        "supports_audio": False,
-        "supports_image": True,
-        "supports_text": True,
-        "memory_requirements_gib": {"nvfp4": None},
-        "llama_cpp_hf_repo_ids": {},
-        "doc_summary": (
-            "NVIDIA-optimized NVFP4 checkpoint. Inputs are text, image, and video; output "
-            "is text. This local lab can route it through an experimental WSL vLLM path on "
-            "NVIDIA Blackwell."
-        ),
-    },
 ]
 MODEL_SPECS_BY_KEY = {spec["key"]: spec for spec in MODEL_SPECS}
 
